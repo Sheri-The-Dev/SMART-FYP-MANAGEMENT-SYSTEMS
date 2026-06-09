@@ -1,0 +1,16 @@
+# Exclude massive directories & docs
+/uploads/
+/docs/
+/scratch_docx/
+/audit_reports/
+
+# Dependencies
+node_modules/
+.env
+client/node_modules/
+server/node_modules/
+
+# Build outputs
+dist/
+build/
+.DS_Store
