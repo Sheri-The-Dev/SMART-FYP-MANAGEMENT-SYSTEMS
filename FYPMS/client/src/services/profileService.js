@@ -107,7 +107,7 @@ export const getProfilePictureUrl = (filename) => {
   }
   
   // Option 2: Use full URL (production or if VITE_API_URL is set)
-  const apiUrl = import.meta.env.VITE_API_URL || 'http://localhost:5000/api';
+  const apiUrl = import.meta.env.VITE_API_URL || 'https://smart-fyp-management-systems.onrender.com/api';
   const baseUrl = apiUrl.replace('/api', '');
   return `${baseUrl}/uploads/${filename}`;
 };

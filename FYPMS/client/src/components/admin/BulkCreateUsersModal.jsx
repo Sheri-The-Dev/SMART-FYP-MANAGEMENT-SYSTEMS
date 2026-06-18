@@ -176,7 +176,7 @@ const BulkCreateUsersModal = ({ isOpen, onClose, onSuccess }) => {
       formData.append('csvFile', selectedFile);
       formData.append('role', selectedRole);
 
-      const response = await fetch(`${import.meta.env.VITE_API_URL || 'http://localhost:5000/api'}/admin/users/bulk-create`, {
+      const response = await fetch(`${import.meta.env.VITE_API_URL || 'https://smart-fyp-management-systems.onrender.com/api'}/admin/users/bulk-create`, {
         method: 'POST',
         headers: {
           'Authorization': `Bearer ${localStorage.getItem('auth_token')}`

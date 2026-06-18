@@ -1,6 +1,6 @@
 import api from './api';
 
-// NOTE: api.js baseURL = 'http://localhost:5000/api'
+// NOTE: api.js baseURL = 'https://smart-fyp-management-systems.onrender.com/api'
 // So all paths here are relative to /api — do NOT include /api prefix
 
 export const getMyDefenseSchedule = async () => {

@@ -7,12 +7,12 @@ export default defineConfig({
   server: {
     proxy: {
       '/api': {
-        target: 'http://localhost:5000',
+        target: 'https://smart-fyp-management-systems.onrender.com',
         changeOrigin: true,
       },
       // ADD THIS - Proxy for static file uploads
       '/uploads': {
-        target: 'http://localhost:5000',
+        target: 'https://smart-fyp-management-systems.onrender.com',
         changeOrigin: true,
       }
     }
