@@ -12,9 +12,9 @@ const getDayName = (dateString) => {
 // ============================================
 exports.getAllEvaluationSessions = async (req, res) => {
   try {
-    const { batch_id } = req.query;
-    if (!batch_id) {
-      return res.status(400).json({ success: false, message: 'Batch ID is required' });
+    const batchId = parseInt(req.query.batch_id, 10);
+    if (isNaN(batchId)) {
+      return res.status(400).json({ success: false, message: 'Batch ID is required and must be a valid number.' });
     }
 
     const sql = `
@@ -31,7 +31,7 @@ exports.getAllEvaluationSessions = async (req, res) => {
       ORDER BY es.session_date DESC, es.session_time DESC
     `;
     
-    const [sessions] = await pool.query(sql, [batch_id]);
+    const [sessions] = await pool.query(sql, [batchId]);
     
     // Get group details for each session
     for (let session of sessions) {
@@ -58,7 +58,7 @@ exports.getAllEvaluationSessions = async (req, res) => {
     res.status(200).json({ success: true, data: sessions });
   } catch (error) {
     console.error('getAllEvaluationSessions Error:', error);
-    res.status(500).json({ success: false, message: 'Server error retrieving sessions.' });
+    res.status(500).json({ success: false, message: 'Server error retrieving sessions.', error: error.message });
   }
 };
 
@@ -75,7 +75,12 @@ exports.createEvaluationSession = async (req, res) => {
       venue, academic_year, group_ids = [], committee_member_ids = [] 
     } = req.body;
 
-    if (!batch_id || !session_type || !session_date || !session_time || !venue) {
+    const parsedBatchId = parseInt(batch_id, 10);
+    if (isNaN(parsedBatchId)) {
+      return res.status(400).json({ success: false, message: 'Batch ID is required and must be a valid number.' });
+    }
+
+    if (!session_type || !session_date || !session_time || !venue) {
       return res.status(400).json({ success: false, message: 'Missing required fields.' });
     }
 
@@ -84,16 +89,20 @@ exports.createEvaluationSession = async (req, res) => {
       `INSERT INTO evaluation_sessions 
        (batch_id, session_type, session_date, session_time, venue, academic_year, created_by) 
        VALUES (?, ?, ?, ?, ?, ?, ?)`,
-      [batch_id, session_type, session_date, session_time, venue, academic_year, req.user.id]
+      [parsedBatchId, session_type, session_date, session_time, venue, academic_year, req.user.id]
     );
     const sessionId = result.insertId;
 
     // Step 2: Insert into evaluation_session_assignments
     if (Array.isArray(group_ids) && group_ids.length > 0) {
       for (const groupId of group_ids) {
+        const parsedGroupId = parseInt(groupId, 10);
+        if (isNaN(parsedGroupId)) {
+          throw new Error(`Invalid group ID provided: ${groupId}`);
+        }
         await connection.execute(
           'INSERT INTO evaluation_session_assignments (session_id, group_id) VALUES (?, ?)',
-          [sessionId, groupId]
+          [sessionId, parsedGroupId]
         );
       }
     }
@@ -101,9 +110,13 @@ exports.createEvaluationSession = async (req, res) => {
     // Step 3: Insert into evaluation_session_committee
     if (Array.isArray(committee_member_ids) && committee_member_ids.length > 0) {
       for (const committeeId of committee_member_ids) {
+        const parsedCommitteeId = parseInt(committeeId, 10);
+        if (isNaN(parsedCommitteeId)) {
+          throw new Error(`Invalid committee member ID provided: ${committeeId}`);
+        }
         await connection.execute(
           'INSERT INTO evaluation_session_committee (session_id, committee_member_id) VALUES (?, ?)',
-          [sessionId, committeeId]
+          [sessionId, parsedCommitteeId]
         );
 
         // Update temporary role for committee member (Step 4 fix)
@@ -114,10 +127,10 @@ exports.createEvaluationSession = async (req, res) => {
              temporary_role_session_id = ?, 
              temporary_role_expires_at = DATE_ADD(?, INTERVAL 7 DAY) 
              WHERE id = ? AND role != 'Committee'`,
-            [sessionId, session_date, committeeId]
+            [sessionId, session_date, parsedCommitteeId]
           );
         } catch (roleErr) {
-          console.warn('[WARN] Temporary role update skipped:', roleErr.sqlMessage);
+          console.warn('[WARN] Temporary role update skipped:', roleErr.sqlMessage || roleErr.message);
           // Continue — don't throw, session creation should still succeed
         }
       }
@@ -146,7 +159,7 @@ exports.createEvaluationSession = async (req, res) => {
              FROM proposals pr
              JOIN users u ON u.id = pr.student_id
              WHERE pr.id IN (${placeholders})`,
-            group_ids
+            group_ids.map(id => parseInt(id, 10)) // Ensure IDs are integers
           );
           groups = fetchedGroups;
         }
@@ -159,7 +172,7 @@ exports.createEvaluationSession = async (req, res) => {
           const placeholders = committee_member_ids.map(() => '?').join(',');
           const [fetchedCommitteeMembers] = await pool.query(
             `SELECT username, email FROM users WHERE id IN (${placeholders})`,
-            committee_member_ids
+            committee_member_ids.map(id => parseInt(id, 10)) // Ensure IDs are integers
           );
           committeeMembers = fetchedCommitteeMembers;
         }
@@ -286,7 +299,11 @@ exports.updateEvaluationSession = async (req, res) => {
   try {
     await connection.beginTransaction();
 
-    const { id } = req.params;
+    const sessionId = parseInt(req.params.id, 10);
+    if (isNaN(sessionId)) {
+      return res.status(400).json({ success: false, message: 'Session ID is required and must be a valid number.' });
+    }
+
     const { 
       session_date, session_time, venue, 
       group_ids = [], committee_member_ids = [] 
@@ -295,34 +312,42 @@ exports.updateEvaluationSession = async (req, res) => {
     // Step 1: Update evaluation_sessions
     await connection.query(
       'UPDATE evaluation_sessions SET session_date = ?, session_time = ?, venue = ? WHERE id = ?',
-      [session_date, session_time, venue, id]
+      [session_date, session_time, venue, sessionId]
     );
 
     // Step 2: Delete old assignments, INSERT new group_ids
-    await connection.query('DELETE FROM evaluation_session_assignments WHERE session_id = ?', [id]);
+    await connection.query('DELETE FROM evaluation_session_assignments WHERE session_id = ?', [sessionId]);
     if (Array.isArray(group_ids) && group_ids.length > 0) {
       for (const groupId of group_ids) {
+        const parsedGroupId = parseInt(groupId, 10);
+        if (isNaN(parsedGroupId)) {
+          throw new Error(`Invalid group ID provided: ${groupId}`);
+        }
         await connection.query(
           'INSERT INTO evaluation_session_assignments (session_id, group_id) VALUES (?, ?)',
-          [id, groupId]
+          [sessionId, parsedGroupId]
         );
       }
     }
 
     // Step 3: Delete old committee, INSERT new committee_member_ids
-    await connection.query('DELETE FROM evaluation_session_committee WHERE session_id = ?', [id]);
+    await connection.query('DELETE FROM evaluation_session_committee WHERE session_id = ?', [sessionId]);
     
     // Revoke old temporary roles for this session
     await connection.query(
       'UPDATE users SET temporary_role = NULL, temporary_role_session_id = NULL, temporary_role_expires_at = NULL WHERE temporary_role_session_id = ?',
-      [id]
+      [sessionId]
     );
 
     if (Array.isArray(committee_member_ids) && committee_member_ids.length > 0) {
       for (const committeeId of committee_member_ids) {
+        const parsedCommitteeId = parseInt(committeeId, 10);
+        if (isNaN(parsedCommitteeId)) {
+          throw new Error(`Invalid committee member ID provided: ${committeeId}`);
+        }
         await connection.query(
           'INSERT INTO evaluation_session_committee (session_id, committee_member_id) VALUES (?, ?)',
-          [id, committeeId]
+          [sessionId, parsedCommitteeId]
         );
 
         // Grant new temporary roles
@@ -332,7 +357,7 @@ exports.updateEvaluationSession = async (req, res) => {
            temporary_role_session_id = ?, 
            temporary_role_expires_at = DATE_ADD(?, INTERVAL 7 DAY) 
            WHERE id = ?`,
-          [id, session_date, committeeId]
+          [sessionId, session_date, parsedCommitteeId]
         );
       }
     }
@@ -352,7 +377,7 @@ exports.updateEvaluationSession = async (req, res) => {
   } catch (error) {
     await connection.rollback();
     console.error('updateEvaluationSession Error:', error);
-    res.status(500).json({ success: false, message: 'Server error updating session.' });
+    res.status(500).json({ success: false, message: 'Server error updating session.', error: error.message });
   } finally {
     connection.release();
   }
@@ -364,6 +389,7 @@ exports.updateEvaluationSession = async (req, res) => {
 exports.getMyEvaluationSchedule = async (req, res) => {
   const studentId = req.user.id;
   try {
+    // studentId is from req.user.id, which is assumed to be an integer.
     const [rows] = await pool.query(`
       SELECT 
         es.session_date, es.session_time, es.venue, es.session_type,
@@ -385,7 +411,7 @@ exports.getMyEvaluationSchedule = async (req, res) => {
     res.status(200).json({ success: true, scheduled: true, data: rows[0] });
   } catch (error) {
     console.error('getMyEvaluationSchedule Error:', error);
-    res.status(500).json({ success: false, message: 'Internal server error.' });
+    res.status(500).json({ success: false, message: 'Internal server error.', error: error.message });
   }
 };
 
@@ -395,6 +421,7 @@ exports.getMyEvaluationSchedule = async (req, res) => {
 exports.getCommitteeAssignedGroups = async (req, res) => {
   const committeeId = req.user.id;
   try {
+    // committeeId is from req.user.id, assumed to be an integer.
     const sql = `
       SELECT 
         es.id as session_id, es.session_type, es.session_date, es.session_time, es.venue,
@@ -426,7 +453,7 @@ exports.getCommitteeAssignedGroups = async (req, res) => {
     res.status(200).json({ success: true, data: rows });
   } catch (error) {
     console.error('getCommitteeAssignedGroups Error:', error);
-    res.status(500).json({ success: false, message: 'Internal server error.' });
+    res.status(500).json({ success: false, message: 'Internal server error.', error: error.message });
   }
 };
 
@@ -437,23 +464,26 @@ exports.deleteEvaluationSession = async (req, res) => {
   const connection = await pool.getConnection();
   try {
     await connection.beginTransaction();
-    const { id } = req.params;
+    const sessionId = parseInt(req.params.id, 10);
+    if (isNaN(sessionId)) {
+      return res.status(400).json({ success: false, message: 'Session ID is required and must be a valid number.' });
+    }
 
     // Revoke temporary roles before deleting the session
     await connection.query(
       'UPDATE users SET temporary_role = NULL, temporary_role_session_id = NULL, temporary_role_expires_at = NULL WHERE temporary_role_session_id = ?',
-      [id]
+      [sessionId]
     );
 
     // Assignments and committee entries will be deleted via ON DELETE CASCADE in DB schema
-    await connection.query('DELETE FROM evaluation_sessions WHERE id = ?', [id]);
+    await connection.query('DELETE FROM evaluation_sessions WHERE id = ?', [sessionId]);
 
     await connection.commit();
     res.status(200).json({ success: true, message: 'Session and temporary roles deleted successfully' });
   } catch (error) {
     await connection.rollback();
     console.error('deleteEvaluationSession Error:', error);
-    res.status(500).json({ success: false, message: 'Server error deleting session' });
+    res.status(500).json({ success: false, message: 'Server error deleting session', error: error.message });
   } finally {
     connection.release();
   }

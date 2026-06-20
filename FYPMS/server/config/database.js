@@ -9,10 +9,11 @@ const pool = mysql.createPool({
   database: process.env.DB_NAME,
   port: process.env.DB_PORT,
   waitForConnections: true,
-  connectionLimit: 20, // Increased from 10 to handle more concurrent requests
+  connectionLimit: 10,  // Scale based on free tier limitations safely
   queueLimit: 0,
   enableKeepAlive: true,
-  keepAliveInitialDelay: 0,
+  keepAliveInitialDelay: 10000,
+  ssl: process.env.NODE_ENV === 'production' ? { rejectUnauthorized: false } : false,
   // Security settings
   multipleStatements: false, // Prevent SQL injection via multiple statements
   dateStrings: true

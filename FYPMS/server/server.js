@@ -29,6 +29,7 @@ const presentationRoutes = require('./routes/presentation');
 // APP INITIALIZATION
 // ==============================
 const app = express();
+app.set('trust proxy', 1);
 const PORT = process.env.PORT || 5000;
 
 // ==============================
@@ -47,7 +48,7 @@ app.use(
 // ==============================
 app.use(
   cors({
-    origin: process.env.FRONTEND_URL || 'http://localhost:5173',
+    origin: process.env.FRONTEND_URL || 'https://smart-fyp-management-systems.onrender.com',
     credentials: true,
     methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
     allowedHeaders: ['Content-Type', 'Authorization'],

@@ -73,7 +73,7 @@ const getScheduledDefenses = async (req, res) => {
         res.status(200).json({ success: true, data: result });
     } catch (error) {
         console.error('getScheduledDefenses Error:', error);
-        res.status(500).json({ success: false, message: 'Internal server error' });
+        res.status(500).json({ success: false, message: 'Internal server error', error: error.message });
     }
 };
 
@@ -83,10 +83,18 @@ const getScheduledDefenses = async (req, res) => {
 // Implements Smart Routing + Rejection Loop
 // ============================================
 const submitEvaluation = async (req, res) => {
-    const { defenseId, proposalId, presentationId, verdict, feedback, tags } = req.body;
+    const { defenseId: defenseIdParam, proposalId: proposalIdParam, presentationId: presentationIdParam, verdict, feedback, tags } = req.body;
     const evaluatorId = req.user.id;
 
-    if (!defenseId || !verdict) {
+    const defenseId = parseInt(defenseIdParam, 10);
+    const proposalId = parseInt(proposalIdParam, 10);
+    const presentationId = parseInt(presentationIdParam, 10);
+
+    if (isNaN(defenseId) || isNaN(proposalId) || isNaN(presentationId)) {
+        return res.status(400).json({ success: false, message: 'Invalid ID provided for defense, proposal, or presentation.' });
+    }
+
+    if (!defenseIdParam || !verdict) {
         return res.status(400).json({
             success: false,
             message: 'defenseId (assignment_id) and verdict are required.'
@@ -232,7 +240,7 @@ const submitEvaluation = async (req, res) => {
     } catch (error) {
         await connection.rollback();
         console.error('submitEvaluation Error:', error);
-        res.status(500).json({ success: false, message: 'Internal server error' });
+        res.status(500).json({ success: false, message: 'Internal server error', error: error.message });
     } finally {
         connection.release();
     }

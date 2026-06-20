@@ -136,7 +136,8 @@ const login = async (req, res) => {
     console.error('Login error:', error);
     res.status(500).json({
       success: false,
-      message: 'An error occurred during login.'
+      message: 'An error occurred during login.',
+      error: error.message
     });
   }
 };
@@ -169,7 +170,8 @@ const logout = async (req, res) => {
     console.error('Logout error:', error);
     res.status(500).json({
       success: false,
-      message: 'An error occurred during logout.'
+      message: 'An error occurred during logout.',
+      error: error.message
     });
   }
 };
@@ -235,7 +237,8 @@ const requestPasswordReset = async (req, res) => {
     console.error('Password reset request error:', error);
     res.status(500).json({
       success: false,
-      message: 'An error occurred. Please try again later.'
+      message: 'An error occurred. Please try again later.',
+      error: error.message
     });
   }
 };
@@ -282,7 +285,8 @@ const validateResetToken = async (req, res) => {
     console.error('Token validation error:', error);
     res.status(500).json({
       success: false,
-      message: 'An error occurred validating the token.'
+      message: 'An error occurred validating the token.',
+      error: error.message
     });
   }
 };
@@ -348,7 +352,8 @@ const resetPassword = async (req, res) => {
     console.error('Password reset error:', error);
     res.status(500).json({
       success: false,
-      message: 'An error occurred resetting your password.'
+      message: 'An error occurred resetting your password.',
+      error: error.message
     });
   }
 };
@@ -405,7 +410,8 @@ const changePassword = async (req, res) => {
     console.error('Change password error:', error);
     res.status(500).json({
       success: false,
-      message: 'An error occurred changing your password.'
+      message: 'An error occurred changing your password.',
+      error: error.message
     });
   }
 };
@@ -439,7 +445,8 @@ const getProfile = async (req, res) => {
     console.error('Get profile error:', error);
     res.status(500).json({
       success: false,
-      message: 'An error occurred retrieving your profile.'
+      message: 'An error occurred retrieving your profile.',
+      error: error.message
     });
   }
 };

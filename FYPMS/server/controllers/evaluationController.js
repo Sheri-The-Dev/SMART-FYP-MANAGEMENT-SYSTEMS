@@ -6,15 +6,23 @@ const { sendCommitteeAssignmentEmail, sendStudentTimeSlotEmail } = require('../u
 const createSession = async (req, res) => {
     const connection = await pool.getConnection();
     try {
-        const { batch_id, session_type, evaluation_date, assigned_committee, group_slots } = req.body;
+        const { batch_id: batchIdParam, session_type, evaluation_date, assigned_committee, group_slots } = req.body;
         const coordinator_id = req.user.id;
 
+        const batch_id = parseInt(batchIdParam, 10);
+        if (isNaN(batch_id)) {
+            if (connection) await connection.rollback();
+            return res.status(400).json({ success: false, message: 'Invalid Batch ID provided.' });
+        }
+
         // 1. Validation
-        if (!batch_id || !session_type || !evaluation_date || !assigned_committee || !group_slots) {
+        if (!batchIdParam || !session_type || !evaluation_date || !assigned_committee || !group_slots) {
+            if (connection) await connection.rollback();
             return res.status(400).json({ success: false, message: 'Missing required fields' });
         }
 
         if (!Array.isArray(assigned_committee) || assigned_committee.length < 2) {
+            if (connection) await connection.rollback();
             return res.status(400).json({ success: false, message: 'At least 2 committee members are required' });
         }
 
@@ -36,7 +44,13 @@ const createSession = async (req, res) => {
         `, [committeeValues]);
 
         // 4. Bulk insert time slots into session_time_slots
-        const slotValues = group_slots.map(slot => [session_id, slot.group_id, slot.start_time, slot.end_time]);
+        const slotValues = group_slots.map(slot => {
+            const groupId = parseInt(slot.group_id, 10);
+            if (isNaN(groupId)) {
+                throw new Error(`Invalid Group ID provided: ${slot.group_id}`);
+            }
+            return [session_id, groupId, slot.start_time, slot.end_time];
+        });
         await connection.query(`
             INSERT INTO session_time_slots (session_id, group_id, start_time, end_time)
             VALUES ?
@@ -62,7 +76,7 @@ const createSession = async (req, res) => {
                     JOIN proposal_members pm ON u.sap_id = pm.sap_id
                     JOIN proposals p ON pm.proposal_id = p.id
                     WHERE p.id = ? AND pm.status = 'accepted'
-                `, [slot.group_id]);
+                `, [parseInt(slot.group_id, 10)]);
 
                 for (const student of students) {
                     await sendStudentTimeSlotEmail(
@@ -92,7 +106,7 @@ const createSession = async (req, res) => {
     } catch (err) {
         if (connection) await connection.rollback();
         console.error('createSession Error:', err);
-        return res.status(500).json({ success: false, message: 'Internal Server Error' });
+        return res.status(500).json({ success: false, message: 'Internal Server Error', error: err.message });
     } finally {
         if (connection) connection.release();
     }
@@ -189,7 +203,7 @@ const getMyAssignedGroups = async (req, res) => {
 
     } catch (err) {
         console.error('getMyAssignedGroups Error:', err);
-        return res.status(500).json({ success: false, message: 'Internal Server Error' });
+        return res.status(500).json({ success: false, message: 'Internal Server Error', error: err.message });
     }
 };
 
@@ -198,16 +212,24 @@ const getMyAssignedGroups = async (req, res) => {
 const submitCommitteeMarks = async (req, res) => {
     const connection = await pool.getConnection();
     try {
-        const { session_id, student_sap_id, lo1_marks, lo2_marks, lo3_marks, lo4_marks, lo5_marks, lo6_marks, lo7_marks, lo8_marks } = req.body;
+        const { session_id: sessionIdParam, student_sap_id, lo1_marks, lo2_marks, lo3_marks, lo4_marks, lo5_marks, lo6_marks, lo7_marks, lo8_marks } = req.body;
         const committee_sap_id = req.user.sap_id;
 
-        if (!session_id || !student_sap_id) {
+        const session_id = parseInt(sessionIdParam, 10);
+        if (isNaN(session_id)) {
+            if (connection) await connection.rollback();
+            return res.status(400).json({ success: false, message: 'Invalid Session ID provided.' });
+        }
+
+        if (!sessionIdParam || !student_sap_id) {
+            if (connection) await connection.rollback();
             return res.status(400).json({ success: false, message: 'Missing session_id or student_sap_id' });
         }
 
         // a) Check evaluation_sessions.is_active
         const [session] = await connection.query(`SELECT is_active, batch_id FROM evaluation_sessions WHERE id = ?`, [session_id]);
         if (session.length === 0 || !session[0].is_active) {
+            if (connection) await connection.rollback();
             return res.status(403).json({ success: false, message: 'Session closed' });
         }
         const batch_id = session[0].batch_id;
@@ -218,6 +240,7 @@ const submitCommitteeMarks = async (req, res) => {
             WHERE session_id = ? AND committee_member_sap_id = ? AND student_sap_id = ?
         `, [session_id, committee_sap_id, student_sap_id]);
         if (existing.length > 0) {
+            if (connection) await connection.rollback();
             return res.status(409).json({ success: false, message: 'Already evaluated' });
         }
 
@@ -226,6 +249,7 @@ const submitCommitteeMarks = async (req, res) => {
                       Number(lo5_marks || 0) + Number(lo6_marks || 0) + Number(lo7_marks || 0) + Number(lo8_marks || 0);
         
         if (total !== 100) {
+            if (connection) await connection.rollback();
             return res.status(400).json({ success: false, message: 'Total must equal 100' });
         }
 
@@ -275,7 +299,7 @@ const submitCommitteeMarks = async (req, res) => {
     } catch (err) {
         if (connection) await connection.rollback();
         console.error('submitCommitteeMarks Error:', err);
-        return res.status(500).json({ success: false, message: 'Internal Server Error' });
+        return res.status(500).json({ success: false, message: 'Internal Server Error', error: err.message });
     } finally {
         if (connection) connection.release();
     }
@@ -345,8 +369,14 @@ const calculateFinalGradeInternal = async (student_sap_id, batch_id, connection)
 // Route: GET /api/evaluation/grades/summary?batch_id=X
 const getGradeSummary = async (req, res) => {
     try {
-        const { batch_id } = req.query;
-        if (!batch_id) {
+        const { batch_id: batchIdParam } = req.query;
+        const batch_id = parseInt(batchIdParam, 10);
+
+        if (isNaN(batch_id)) {
+            return res.status(400).json({ success: false, message: 'Invalid Batch ID provided.' });
+        }
+
+        if (!batchIdParam) {
             return res.status(400).json({ success: false, message: 'batch_id is required' });
         }
 
@@ -376,7 +406,7 @@ const getGradeSummary = async (req, res) => {
 
     } catch (err) {
         console.error('getGradeSummary Error:', err);
-        return res.status(500).json({ success: false, message: 'Internal Server Error' });
+        return res.status(500).json({ success: false, message: 'Internal Server Error', error: err.message });
     }
 };
 
@@ -384,8 +414,14 @@ const getGradeSummary = async (req, res) => {
 // Route: POST /api/evaluation/grades/release
 const releaseResults = async (req, res) => {
     try {
-        const { batch_id } = req.body;
-        if (!batch_id) {
+        const { batch_id: batchIdParam } = req.body;
+        const batch_id = parseInt(batchIdParam, 10);
+
+        if (isNaN(batch_id)) {
+            return res.status(400).json({ success: false, message: 'Invalid Batch ID provided.' });
+        }
+
+        if (!batchIdParam) {
             return res.status(400).json({ success: false, message: 'batch_id is required' });
         }
 
@@ -403,7 +439,7 @@ const releaseResults = async (req, res) => {
 
     } catch (err) {
         console.error('releaseResults Error:', err);
-        return res.status(500).json({ success: false, message: 'Internal Server Error' });
+        return res.status(500).json({ success: false, message: 'Internal Server Error', error: err.message });
     }
 };
 
@@ -429,7 +465,7 @@ const getMyGrade = async (req, res) => {
 
     } catch (err) {
         console.error('getMyGrade Error:', err);
-        return res.status(500).json({ success: false, message: 'Internal Server Error' });
+        return res.status(500).json({ success: false, message: 'Internal Server Error', error: err.message });
     }
 };
 

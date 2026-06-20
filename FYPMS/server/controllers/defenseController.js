@@ -1,5 +1,6 @@
 const { pool } = require('../config/database');
 const { logAudit } = require('../utils/logger');
+const fs = require('fs');
 
 // ============================================
 // SUBMIT DEFENSE FILES (Student)
@@ -9,14 +10,22 @@ const { logAudit } = require('../utils/logger');
 // ============================================
 const submitDefense = async (req, res) => {
     const studentId = req.user.id;
-    const { proposal_id, presentation_id } = req.body;
+    const { proposal_id: proposalIdParam, presentation_id: presentationIdParam } = req.body;
 
     if (!req.file) {
         return res.status(400).json({ success: false, message: 'No file uploaded.' });
     }
 
-    if (!proposal_id) {
-        return res.status(400).json({ success: false, message: 'proposal_id is required.' });
+    const proposal_id = parseInt(proposalIdParam, 10);
+    const presentation_id = presentationIdParam ? parseInt(presentationIdParam, 10) : null;
+
+    if (isNaN(proposal_id)) {
+        if (req.file && fs.existsSync(req.file.path)) fs.unlinkSync(req.file.path);
+        return res.status(400).json({ success: false, message: 'Invalid Proposal ID provided.' });
+    }
+    if (presentationIdParam && isNaN(presentation_id)) {
+        if (req.file && fs.existsSync(req.file.path)) fs.unlinkSync(req.file.path);
+        return res.status(400).json({ success: false, message: 'Invalid Presentation ID provided.' });
     }
 
     try {
@@ -28,6 +37,7 @@ const submitDefense = async (req, res) => {
         const isPptx = ['ppt', 'pptx'].includes(ext);
 
         if (!isPdf && !isPptx) {
+            if (req.file && fs.existsSync(req.file.path)) fs.unlinkSync(req.file.path);
             return res.status(400).json({ success: false, message: 'Only PDF and PPTX files are accepted.' });
         }
 
@@ -52,14 +62,14 @@ const submitDefense = async (req, res) => {
             return res.status(200).json({ success: true, message: 'Defense file updated successfully.' });
         } else {
             // New submission — require both paths eventually, but accept partial for now
-            const pdfPath  = isPdf  ? filePath : '';
-            const pptxPath = isPptx ? filePath : '';
+            const pdfPath  = isPdf  ? filePath : null;
+            const pptxPath = isPptx ? filePath : null;
 
             await pool.query(
                 `INSERT INTO defense_submissions
                  (proposal_id, presentation_id, proposal_pdf_path, presentation_pptx_path, submission_status, submitted_at)
                  VALUES (?, ?, ?, ?, 'submitted', NOW())`,
-                [proposal_id, presentation_id || null, pdfPath, pptxPath]
+                [proposal_id, presentation_id, pdfPath, pptxPath]
             );
 
             // Update proposals.defense_status
@@ -79,7 +89,8 @@ const submitDefense = async (req, res) => {
         }
     } catch (error) {
         console.error('submitDefense Error:', error);
-        res.status(500).json({ success: false, message: 'Internal server error.' });
+        if (req.file && fs.existsSync(req.file.path)) fs.unlinkSync(req.file.path);
+        res.status(500).json({ success: false, message: 'Internal server error.', error: error.message });
     }
 };
 
@@ -119,7 +130,7 @@ const getMyDefenseSchedule = async (req, res) => {
         res.status(200).json({ success: true, data: rows[0] });
     } catch (error) {
         console.error('getMyDefenseSchedule Error:', error);
-        res.status(500).json({ success: false, message: 'Internal server error.' });
+        res.status(500).json({ success: false, message: 'Internal server error.', error: error.message });
     }
 };
 

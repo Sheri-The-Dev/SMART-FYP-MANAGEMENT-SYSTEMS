@@ -36,11 +36,12 @@ const createUser = async (req, res) => {
 
     // Generate temporary password if not provided
     const temporaryPassword = password || generateSecureToken(12);
-    const bcryptRounds = parseInt(process.env.BCRYPT_ROUNDS) || 10;
+    const bcryptRounds = parseInt(process.env.BCRYPT_ROUNDS, 10) || 10;
     const passwordHash = await bcrypt.hash(temporaryPassword, bcryptRounds);
 
     // Default max supervisees for teachers
-    const maxSupervisees = req.body.max_supervisees || 5;
+    const maxSupervisees = parseInt(req.body.max_supervisees, 10);
+    const cleanMaxSupervisees = isNaN(maxSupervisees) ? 5 : maxSupervisees; // Fallback to 5
 
     // Create user
     const userSql = `
@@ -56,7 +57,7 @@ const createUser = async (req, res) => {
       role || null,
       department || null,
       adminId || null,
-      role === 'Teacher' ? (maxSupervisees || 5) : null
+      role === 'Teacher' ? cleanMaxSupervisees : null
     ]);
     const newUserId = result.insertId;
 
@@ -67,7 +68,7 @@ const createUser = async (req, res) => {
       action: AuditActions.USER_CREATED,
       entityType: 'user',
       entityId: newUserId,
-      details: { username, email, sap_id, role, department, max_supervisees: role === 'Teacher' ? maxSupervisees : undefined },
+      details: { username, email, sap_id, role, department, max_supervisees: role === 'Teacher' ? cleanMaxSupervisees : undefined },
       ipAddress
     });
 
@@ -99,7 +100,8 @@ const createUser = async (req, res) => {
     console.error('Create user error:', error);
     res.status(500).json({
       success: false,
-      message: 'An error occurred creating the user.'
+      message: 'An error occurred creating the user.',
+      error: error.message
     });
   }
 };
@@ -107,7 +109,9 @@ const createUser = async (req, res) => {
 // Get all users (Admin only)
 const getAllUsers = async (req, res) => {
   try {
-    const { role, search, page = 1, limit = 10 } = req.query;
+    const { role, search } = req.query;
+    const page = parseInt(req.query.page, 10) || 1;
+    const limit = parseInt(req.query.limit, 10) || 10;
     const offset = (page - 1) * limit;
 
     let sql = `
@@ -143,11 +147,11 @@ const getAllUsers = async (req, res) => {
     // Get total count
     const countSql = sql.replace(/SELECT.*FROM/, 'SELECT COUNT(*) as total FROM');
     const [countResult] = await query(countSql, params);
-    const total = countResult?.total || 0;
+    const total = countResult?.[0]?.total || 0;
 
     // Add pagination
     sql += ' ORDER BY u.created_at DESC LIMIT ? OFFSET ?';
-    params.push(parseInt(limit), parseInt(offset));
+    params.push(limit, offset);
 
     const users = await query(sql, params);
 
@@ -156,8 +160,8 @@ const getAllUsers = async (req, res) => {
       data: {
         users,
         pagination: {
-          page: parseInt(page),
-          limit: parseInt(limit),
+          page: page,
+          limit: limit,
           total,
           totalPages: Math.ceil(total / limit)
         }
@@ -168,7 +172,8 @@ const getAllUsers = async (req, res) => {
     console.error('Get users error:', error);
     res.status(500).json({
       success: false,
-      message: 'An error occurred retrieving users.'
+      message: 'An error occurred retrieving users.',
+      error: error.message
     });
   }
 };
@@ -176,7 +181,11 @@ const getAllUsers = async (req, res) => {
 // Get user by ID (Admin only)
 const getUserById = async (req, res) => {
   try {
-    const { id } = req.params;
+    const id = parseInt(req.params.id, 10);
+
+    if (isNaN(id)) {
+      return res.status(400).json({ success: false, message: 'Invalid User ID provided.' });
+    }
 
     const userSql = `
       SELECT 
@@ -221,7 +230,8 @@ const getUserById = async (req, res) => {
     console.error('Get user error:', error);
     res.status(500).json({
       success: false,
-      message: 'An error occurred retrieving the user.'
+      message: 'An error occurred retrieving the user.',
+      error: error.message
     });
   }
 };
@@ -229,10 +239,14 @@ const getUserById = async (req, res) => {
 // Update user (Admin only)
 const updateUser = async (req, res) => {
   try {
-    const { id } = req.params;
+    const id = parseInt(req.params.id, 10);
     const { email, role, is_active, department, password } = req.body;
     const adminId = req.user.id;
     const ipAddress = getClientIp(req);
+
+    if (isNaN(id)) {
+      return res.status(400).json({ success: false, message: 'Invalid User ID provided.' });
+    }
 
     // Check if user exists
     const [user] = await query('SELECT username, role FROM users WHERE id = ?', [id]);
@@ -245,7 +259,7 @@ const updateUser = async (req, res) => {
     }
 
     // Prevent admin from disabling themselves
-    if (id == adminId && is_active === false) {
+    if (id === adminId && is_active === false) {
       return res.status(400).json({
         success: false,
         message: 'You cannot disable your own account.'
@@ -259,7 +273,7 @@ const updateUser = async (req, res) => {
         [email, id]
       );
 
-      if (existingEmail) {
+      if (existingEmail && existingEmail.length > 0) {
         return res.status(400).json({
           success: false,
           message: 'Email already exists.'
@@ -287,7 +301,8 @@ const updateUser = async (req, res) => {
     }
 
     if (password) {
-      const passwordHash = await bcrypt.hash(password, parseInt(process.env.BCRYPT_ROUNDS));
+      const bcryptRounds = parseInt(process.env.BCRYPT_ROUNDS, 10) || 10;
+      const passwordHash = await bcrypt.hash(password, bcryptRounds);
       updates.push('password_hash = ?');
       params.push(passwordHash);
     }
@@ -301,8 +316,12 @@ const updateUser = async (req, res) => {
         params.push(department);
       }
       if (req.body.max_supervisees !== undefined) {
+        const maxSupervisees = parseInt(req.body.max_supervisees, 10);
+        if (isNaN(maxSupervisees)) {
+          return res.status(400).json({ success: false, message: 'Invalid max_supervisees value provided.' });
+        }
         updates.push('max_supervisees = ?');
-        params.push(req.body.max_supervisees);
+        params.push(maxSupervisees);
       }
     } else {
       if (department !== undefined) {
@@ -310,8 +329,12 @@ const updateUser = async (req, res) => {
         params.push(department);
       }
       if (req.body.max_supervisees !== undefined && effectiveRole === 'Teacher') {
+        const maxSupervisees = parseInt(req.body.max_supervisees, 10);
+        if (isNaN(maxSupervisees)) {
+          return res.status(400).json({ success: false, message: 'Invalid max_supervisees value provided.' });
+        }
         updates.push('max_supervisees = ?');
-        params.push(req.body.max_supervisees);
+        params.push(maxSupervisees);
       } else if (effectiveRole !== 'Teacher' && role) {
         updates.push('max_supervisees = NULL');
       }
@@ -350,7 +373,8 @@ const updateUser = async (req, res) => {
     console.error('Update user error:', error);
     res.status(500).json({
       success: false,
-      message: 'An error occurred updating the user.'
+      message: 'An error occurred updating the user.',
+      error: error.message
     });
   }
 };
@@ -358,12 +382,16 @@ const updateUser = async (req, res) => {
 // Delete user (Admin only)
 const deleteUser = async (req, res) => {
   try {
-    const { id } = req.params;
+    const id = parseInt(req.params.id, 10);
     const adminId = req.user.id;
     const ipAddress = getClientIp(req);
 
+    if (isNaN(id)) {
+      return res.status(400).json({ success: false, message: 'Invalid User ID provided.' });
+    }
+
     // Prevent admin from deleting themselves
-    if (id == adminId) {
+    if (id === adminId) {
       return res.status(400).json({
         success: false,
         message: 'You cannot delete your own account.'
@@ -373,7 +401,7 @@ const deleteUser = async (req, res) => {
     // Get user info before deletion
     const [user] = await query('SELECT username, email FROM users WHERE id = ?', [id]);
 
-    if (!user) {
+    if (!user || user.length === 0) {
       return res.status(404).json({
         success: false,
         message: 'User not found.'
@@ -389,7 +417,7 @@ const deleteUser = async (req, res) => {
       action: AuditActions.USER_DELETED,
       entityType: 'user',
       entityId: id,
-      details: { username: user.username, email: user.email },
+      details: { username: user[0].username, email: user[0].email },
       ipAddress
     });
 
@@ -402,7 +430,8 @@ const deleteUser = async (req, res) => {
     console.error('Delete user error:', error);
     res.status(500).json({
       success: false,
-      message: 'An error occurred deleting the user.'
+      message: 'An error occurred deleting the user.',
+      error: error.message
     });
   }
 };
@@ -410,9 +439,13 @@ const deleteUser = async (req, res) => {
 // Admin-initiated password reset via email
 const adminRequestPasswordReset = async (req, res) => {
   try {
-    const { id } = req.params;
+    const id = parseInt(req.params.id, 10);
     const adminId = req.user.id;
     const ipAddress = getClientIp(req);
+
+    if (isNaN(id)) {
+      return res.status(400).json({ success: false, message: 'Invalid User ID provided.' });
+    }
 
     // Get user info
     const [user] = await query(
@@ -420,7 +453,7 @@ const adminRequestPasswordReset = async (req, res) => {
       [id]
     );
 
-    if (!user) {
+    if (!user || user.length === 0) {
       return res.status(404).json({
         success: false,
         message: 'User not found or inactive.'
@@ -439,12 +472,13 @@ const adminRequestPasswordReset = async (req, res) => {
 
     // Send reset email
     try {
-      await sendPasswordResetEmail(user.email, user.username, token);
+      await sendPasswordResetEmail(user[0].email, user[0].username, token);
     } catch (emailError) {
       console.error('Email send error:', emailError);
       return res.status(500).json({
         success: false,
-        message: 'Failed to send password reset email.'
+        message: 'Failed to send password reset email.',
+        error: emailError.message
       });
     }
 
@@ -455,20 +489,21 @@ const adminRequestPasswordReset = async (req, res) => {
       action: AuditActions.ADMIN_PASSWORD_RESET_INITIATED,
       entityType: 'user',
       entityId: id,
-      details: { username: user.username, method: 'email' },
+      details: { username: user[0].username, method: 'email' },
       ipAddress
     });
 
     res.status(200).json({
       success: true,
-      message: `Password reset email sent to ${user.email}`
+      message: `Password reset email sent to ${user[0].email}`
     });
 
   } catch (error) {
     console.error('Admin password reset error:', error);
     res.status(500).json({
       success: false,
-      message: 'An error occurred initiating password reset.'
+      message: 'An error occurred initiating password reset.',
+      error: error.message
     });
   }
 };
@@ -476,9 +511,13 @@ const adminRequestPasswordReset = async (req, res) => {
 // Initiate security question challenge (Admin only)
 const initiateSecurityChallenge = async (req, res) => {
   try {
-    const { id } = req.params;
+    const id = parseInt(req.params.id, 10);
     const adminId = req.user.id;
     const ipAddress = getClientIp(req);
+
+    if (isNaN(id)) {
+      return res.status(400).json({ success: false, message: 'Invalid User ID provided.' });
+    }
 
     // Get user info
     const [user] = await query(
@@ -486,7 +525,7 @@ const initiateSecurityChallenge = async (req, res) => {
       [id]
     );
 
-    if (!user) {
+    if (!user || user.length === 0) {
       return res.status(404).json({
         success: false,
         message: 'User not found or inactive.'
@@ -499,7 +538,7 @@ const initiateSecurityChallenge = async (req, res) => {
       [id]
     );
 
-    if (!securityQuestion || securityQuestion.count === 0) {
+    if (!securityQuestion || securityQuestion.length === 0 || securityQuestion[0].count === 0) {
       return res.status(400).json({
         success: false,
         message: 'User has not set up security questions.'
@@ -508,6 +547,10 @@ const initiateSecurityChallenge = async (req, res) => {
 
     // Get admin info
     const [admin] = await query('SELECT username FROM users WHERE id = ?', [adminId]);
+
+    if (!admin || admin.length === 0) {
+      return res.status(404).json({ success: false, message: 'Admin user not found.' });
+    }
 
     // Generate challenge token
     const { token, expiresAt } = generateChallengeToken();
@@ -521,12 +564,13 @@ const initiateSecurityChallenge = async (req, res) => {
 
     // Send challenge email
     try {
-      await sendSecurityChallengeEmail(user.email, user.username, token, admin.username);
+      await sendSecurityChallengeEmail(user[0].email, user[0].username, token, admin[0].username);
     } catch (emailError) {
       console.error('Email send error:', emailError);
       return res.status(500).json({
         success: false,
-        message: 'Failed to send security challenge email.'
+        message: 'Failed to send security challenge email.',
+        error: emailError.message
       });
     }
 
@@ -537,13 +581,13 @@ const initiateSecurityChallenge = async (req, res) => {
       action: AuditActions.ADMIN_SECURITY_CHALLENGE_SENT,
       entityType: 'user',
       entityId: id,
-      details: { username: user.username },
+      details: { username: user[0].username },
       ipAddress
     });
 
     res.status(200).json({
       success: true,
-      message: `Security challenge sent to ${user.email}`,
+      message: `Security challenge sent to ${user[0].email}`,
       data: {
         challengeId: token,
         expiresAt
@@ -554,7 +598,8 @@ const initiateSecurityChallenge = async (req, res) => {
     console.error('Initiate security challenge error:', error);
     res.status(500).json({
       success: false,
-      message: 'An error occurred initiating security challenge.'
+      message: 'An error occurred initiating security challenge.',
+      error: error.message
     });
   }
 };
@@ -581,7 +626,7 @@ const getSecurityQuestions = async (req, res) => {
 
     const [challenge] = await query(challengeSql, [token]);
 
-    if (!challenge) {
+    if (!challenge || challenge.length === 0) {
       return res.status(400).json({
         success: false,
         message: 'Invalid or expired challenge token.'
@@ -596,12 +641,12 @@ const getSecurityQuestions = async (req, res) => {
       ORDER BY id
     `;
 
-    const questions = await query(questionsSql, [challenge.user_id]);
+    const questions = await query(questionsSql, [challenge[0].user_id]);
 
     res.status(200).json({
       success: true,
       data: {
-        username: challenge.username,
+        username: challenge[0].username,
         questions
       }
     });
@@ -610,7 +655,8 @@ const getSecurityQuestions = async (req, res) => {
     console.error('Get security questions error:', error);
     res.status(500).json({
       success: false,
-      message: 'An error occurred retrieving security questions.'
+      message: 'An error occurred retrieving security questions.',
+      error: error.message
     });
   }
 };
@@ -620,6 +666,10 @@ const verifySecurityAnswers = async (req, res) => {
   try {
     const { token, answers } = req.body;
     const ipAddress = getClientIp(req);
+
+    if (!Array.isArray(answers)) {
+      return res.status(400).json({ success: false, message: 'Answers must be an array.' });
+    }
 
     // Validate token
     const challengeSql = `
@@ -631,7 +681,7 @@ const verifySecurityAnswers = async (req, res) => {
 
     const [challenge] = await query(challengeSql, [token]);
 
-    if (!challenge) {
+    if (!challenge || challenge.length === 0) {
       return res.status(400).json({
         success: false,
         message: 'Invalid or expired challenge token.'
@@ -645,12 +695,17 @@ const verifySecurityAnswers = async (req, res) => {
       WHERE user_id = ?
     `;
 
-    const storedQuestions = await query(questionsSql, [challenge.user_id]);
+    const storedQuestions = await query(questionsSql, [challenge[0].user_id]);
 
     // Verify all answers
     let allCorrect = true;
     for (const answer of answers) {
-      const storedQuestion = storedQuestions.find(q => q.id === answer.questionId);
+      const parsedQuestionId = parseInt(answer.questionId, 10);
+      if (isNaN(parsedQuestionId)) {
+        allCorrect = false;
+        break;
+      }
+      const storedQuestion = storedQuestions.find(q => q.id === parsedQuestionId);
 
       if (!storedQuestion) {
         allCorrect = false;
@@ -677,10 +732,10 @@ const verifySecurityAnswers = async (req, res) => {
 
       // Log failed verification
       await logAudit({
-        userId: challenge.user_id,
-        adminId: challenge.admin_id,
+        userId: challenge[0].user_id,
+        adminId: challenge[0].admin_id,
         action: AuditActions.SECURITY_QUESTION_FAILED,
-        details: { username: challenge.username },
+        details: { username: challenge[0].username },
         ipAddress
       });
 
@@ -698,10 +753,10 @@ const verifySecurityAnswers = async (req, res) => {
 
     // Log successful verification
     await logAudit({
-      userId: challenge.user_id,
-      adminId: challenge.admin_id,
+      userId: challenge[0].user_id,
+      adminId: challenge[0].admin_id,
       action: AuditActions.SECURITY_QUESTION_VERIFIED,
-      details: { username: challenge.username },
+      details: { username: challenge[0].username },
       ipAddress
     });
 
@@ -717,7 +772,8 @@ const verifySecurityAnswers = async (req, res) => {
     console.error('Verify security answers error:', error);
     res.status(500).json({
       success: false,
-      message: 'An error occurred verifying security answers.'
+      message: 'An error occurred verifying security answers.',
+      error: error.message
     });
   }
 };
@@ -738,7 +794,7 @@ const completePasswordReset = async (req, res) => {
 
     const [challenge] = await query(challengeSql, [token]);
 
-    if (!challenge) {
+    if (!challenge || challenge.length === 0) {
       return res.status(400).json({
         success: false,
         message: 'Invalid challenge token or verification not completed.'
@@ -746,16 +802,17 @@ const completePasswordReset = async (req, res) => {
     }
 
     // Hash new password
-    const passwordHash = await bcrypt.hash(newPassword, parseInt(process.env.BCRYPT_ROUNDS));
+    const bcryptRounds = parseInt(process.env.BCRYPT_ROUNDS, 10) || 10;
+    const passwordHash = await bcrypt.hash(newPassword, bcryptRounds);
 
     // Update password
     await query(
       'UPDATE users SET password_hash = ?, updated_at = NOW() WHERE id = ?',
-      [passwordHash, challenge.user_id]
+      [passwordHash, challenge[0].user_id]
     );
 
     // Invalidate all sessions
-    await query('DELETE FROM sessions WHERE user_id = ?', [challenge.user_id]);
+    await query('DELETE FROM sessions WHERE user_id = ?', [challenge[0].user_id]);
 
     // Mark challenge as completed (update to a completed status)
     await query(
@@ -765,10 +822,10 @@ const completePasswordReset = async (req, res) => {
 
     // Log password reset
     await logAudit({
-      userId: challenge.user_id,
-      adminId: challenge.admin_id,
+      userId: challenge[0].user_id,
+      adminId: challenge[0].admin_id,
       action: AuditActions.ADMIN_PASSWORD_RESET_COMPLETED,
-      details: { username: challenge.username, method: 'security_questions' },
+      details: { username: challenge[0].username, method: 'security_questions' },
       ipAddress
     });
 
@@ -781,7 +838,8 @@ const completePasswordReset = async (req, res) => {
     console.error('Complete password reset error:', error);
     res.status(500).json({
       success: false,
-      message: 'An error occurred completing password reset.'
+      message: 'An error occurred completing password reset.',
+      error: error.message
     });
   }
 };
@@ -789,7 +847,10 @@ const completePasswordReset = async (req, res) => {
 // Get audit logs (Admin only)
 const getAuditLogs = async (req, res) => {
   try {
-    const { userId, action, startDate, endDate, page = 1, limit = 50, search } = req.query;
+    const userId = parseInt(req.query.userId, 10);
+    const { action, startDate, endDate, search } = req.query;
+    const page = parseInt(req.query.page, 10) || 1;
+    const limit = parseInt(req.query.limit, 10) || 50;
     const offset = (page - 1) * limit;
 
     let sql = `
@@ -806,7 +867,7 @@ const getAuditLogs = async (req, res) => {
 
     const params = [];
 
-    if (userId) {
+    if (!isNaN(userId)) {
       sql += ' AND a.user_id = ?';
       params.push(userId);
     }
@@ -834,11 +895,11 @@ const getAuditLogs = async (req, res) => {
     // Get total count
     const countSql = sql.replace(/SELECT.*FROM/, 'SELECT COUNT(*) as total FROM');
     const [countResult] = await query(countSql, params);
-    const total = countResult?.total || 0;
+    const total = countResult?.[0]?.total || 0;
 
     // Add pagination
     sql += ' ORDER BY a.created_at DESC LIMIT ? OFFSET ?';
-    params.push(parseInt(limit), parseInt(offset));
+    params.push(limit, offset);
 
     const logs = await query(sql, params);
 
@@ -847,8 +908,8 @@ const getAuditLogs = async (req, res) => {
       data: {
         logs,
         pagination: {
-          page: parseInt(page),
-          limit: parseInt(limit),
+          page: page,
+          limit: limit,
           total,
           totalPages: Math.ceil(total / limit)
         }
@@ -859,7 +920,8 @@ const getAuditLogs = async (req, res) => {
     console.error('Get audit logs error:', error);
     res.status(500).json({
       success: false,
-      message: 'An error occurred retrieving audit logs.'
+      message: 'An error occurred retrieving audit logs.',
+      error: error.message
     });
   }
 };
@@ -876,7 +938,7 @@ const getDashboardStats = async (req, res) => {
       FROM users
       GROUP BY role
     `;
-    const userStats = await query(userStatsSql);
+    const [userStats] = await query(userStatsSql);
 
     // Recent logins (last 24 hours)
     const [recentLogins] = await query(`
@@ -916,7 +978,7 @@ const getDashboardStats = async (req, res) => {
     `);
     const [pendingProposals] = await query(`
       SELECT COUNT(*) as count FROM proposals WHERE status IN ('submitted', 'pending_member_confirmation')
-    `).catch(() => [{ count: 0 }]);
+    `);
     // ────────────────────────────────────────────────────────────────
 
     res.status(200).json({
@@ -924,15 +986,15 @@ const getDashboardStats = async (req, res) => {
       data: {
         userStats,
         recentActivity: {
-          recentLogins: recentLogins?.count || 0,
-          failedLogins: failedLogins?.count || 0,
-          passwordResets: passwordResets?.count || 0,
-          newUsers: newUsers?.count || 0
+          recentLogins: recentLogins?.[0]?.count || 0,
+          failedLogins: failedLogins?.[0]?.count || 0,
+          passwordResets: passwordResets?.[0]?.count || 0,
+          newUsers: newUsers?.[0]?.count || 0
         },
         batchStats: {
-          activeBatches: activeBatches?.count || 0,
-          enrolledStudents: enrolledStudents?.count || 0,
-          pendingProposals: pendingProposals?.count || 0
+          activeBatches: activeBatches?.[0]?.count || 0,
+          enrolledStudents: enrolledStudents?.[0]?.count || 0,
+          pendingProposals: pendingProposals?.[0]?.count || 0
         }
       }
     });
@@ -941,7 +1003,8 @@ const getDashboardStats = async (req, res) => {
     console.error('Get dashboard stats error:', error);
     res.status(500).json({
       success: false,
-      message: 'An error occurred retrieving dashboard statistics.'
+      message: 'An error occurred retrieving dashboard statistics.',
+      error: error.message
     });
   }
 };
@@ -1033,7 +1096,7 @@ const bulkCreateUsers = async (req, res) => {
     const existingEmailsQuery = `
       SELECT email FROM users WHERE email IN (${emails.map(() => '?').join(',')})
     `;
-    const existingUsers = await query(existingEmailsQuery, emails);
+    const [existingUsers] = await query(existingEmailsQuery, emails);
     const existingEmails = existingUsers.map(u => u.email.toLowerCase());
 
     // Filter out existing emails
@@ -1077,7 +1140,7 @@ const bulkCreateUsers = async (req, res) => {
             [finalUsername]
           );
 
-          if (!existingUser) {
+          if (!existingUser || existingUser.length === 0) {
             usernameExists = false;
           } else {
             finalUsername = `${baseId}${Math.floor(Math.random() * 9999)}`;
@@ -1093,7 +1156,7 @@ const bulkCreateUsers = async (req, res) => {
 
         // Generate secure password
         const temporaryPassword = generateSecureToken(12);
-        const passwordHash = await bcrypt.hash(temporaryPassword, parseInt(process.env.BCRYPT_ROUNDS) || 10);
+        const passwordHash = await bcrypt.hash(temporaryPassword, parseInt(process.env.BCRYPT_ROUNDS, 10) || 10);
 
         // Insert user
         const userSql = `
@@ -1101,7 +1164,7 @@ const bulkCreateUsers = async (req, res) => {
           VALUES (?, ?, ?, ?, ?, ?, ?)
         `;
 
-        const result = await query(userSql, [
+        const [insertResult] = await query(userSql, [
           finalUsername || null,
           user.email || null,
           baseId || null,
@@ -1110,7 +1173,7 @@ const bulkCreateUsers = async (req, res) => {
           user.department || null,
           adminId || null
         ]);
-        const newUserId = result.insertId;
+        const newUserId = insertResult.insertId;
 
         // Log user creation
         await logAudit({
@@ -1172,7 +1235,8 @@ const bulkCreateUsers = async (req, res) => {
 
     res.status(500).json({
       success: false,
-      message: 'An error occurred during bulk user creation.'
+      message: 'An error occurred during bulk user creation.',
+      error: error.message
     });
   }
 };
@@ -1198,7 +1262,7 @@ const exportWorkloadReport = async (req, res) => {
       ORDER BY u.department, u.username
     `;
 
-    const supervisors = await query(sql);
+    const [supervisors] = await query(sql);
 
     if (format === 'csv') {
       const fields = [
@@ -1230,7 +1294,8 @@ const exportWorkloadReport = async (req, res) => {
     console.error('Export workload report error:', error);
     res.status(500).json({
       success: false,
-      message: 'Failed to generate workload report'
+      message: 'Failed to generate workload report',
+      error: error.message
     });
   }
 };
@@ -1238,7 +1303,8 @@ const exportWorkloadReport = async (req, res) => {
 // Get capacity alerts (Admin only)
 const getCapacityAlerts = async (req, res) => {
   try {
-    const { threshold = 0.8 } = req.query; // Default threshold 80%
+    const threshold = parseFloat(req.query.threshold);
+    const cleanThreshold = isNaN(threshold) ? 0.8 : threshold; // Default threshold 80%
 
     const sql = `
       SELECT 
@@ -1257,7 +1323,7 @@ const getCapacityAlerts = async (req, res) => {
       ORDER BY current_supervisees DESC
     `;
 
-    const alerts = await query(sql, [threshold, threshold]);
+    const [alerts] = await query(sql, [cleanThreshold, cleanThreshold]);
 
     res.status(200).json({
       success: true,
@@ -1268,7 +1334,8 @@ const getCapacityAlerts = async (req, res) => {
     console.error('Get capacity alerts error:', error);
     res.status(500).json({
       success: false,
-      message: 'Failed to retrieve capacity alerts'
+      message: 'Failed to retrieve capacity alerts',
+      error: error.message
     });
   }
 };
@@ -1276,9 +1343,13 @@ const getCapacityAlerts = async (req, res) => {
 // Reset supervisor workload (Admin only)
 const resetWorkload = async (req, res) => {
   try {
-    const { id } = req.params;
+    const id = parseInt(req.params.id, 10);
     const adminId = req.user.id;
     const ipAddress = getClientIp(req);
+
+    if (isNaN(id)) {
+      return res.status(400).json({ success: false, message: 'Invalid User ID provided.' });
+    }
 
     await query('UPDATE users SET current_supervisees = 0 WHERE id = ?', [id]);
 
@@ -1296,16 +1367,20 @@ const resetWorkload = async (req, res) => {
     res.json({ success: true, message: 'Workload reset successfully' });
   } catch (error) {
     console.error('Reset workload error:', error);
-    res.status(500).json({ success: false, message: 'Error resetting workload' });
+    res.status(500).json({ success: false, message: 'Error resetting workload', error: error.message });
   }
 };
 
 // Decrement supervisor workload (Admin only)
 const decrementWorkload = async (req, res) => {
   try {
-    const { id } = req.params;
+    const id = parseInt(req.params.id, 10);
     const adminId = req.user.id;
     const ipAddress = getClientIp(req);
+
+    if (isNaN(id)) {
+      return res.status(400).json({ success: false, message: 'Invalid User ID provided.' });
+    }
 
     await query('UPDATE users SET current_supervisees = GREATEST(0, current_supervisees - 1) WHERE id = ?', [id]);
 
@@ -1323,7 +1398,7 @@ const decrementWorkload = async (req, res) => {
     res.json({ success: true, message: 'Workload decremented successfully' });
   } catch (error) {
     console.error('Decrement workload error:', error);
-    res.status(500).json({ success: false, message: 'Error decrementing workload' });
+    res.status(500).json({ success: false, message: 'Error decrementing workload', error: error.message });
   }
 };
 
@@ -1354,8 +1429,12 @@ const exportUsers = async (req, res) => {
 
     // Filter by selected user IDs (if admin selected specific rows)
     if (Array.isArray(userIds) && userIds.length > 0) {
-      sql += ` AND id IN (${userIds.map(() => '?').join(',')})`;
-      params.push(...userIds);
+      const parsedUserIds = userIds.map(id => parseInt(id, 10)).filter(id => !isNaN(id));
+      if (parsedUserIds.length === 0) {
+        return res.status(400).json({ success: false, message: 'Invalid User IDs provided for export.' });
+      }
+      sql += ` AND id IN (${parsedUserIds.map(() => '?').join(',')})`;
+      params.push(...parsedUserIds);
     } else {
       // Otherwise apply table filters
       if (role && role !== 'all') {
@@ -1375,11 +1454,11 @@ const exportUsers = async (req, res) => {
 
     sql += ' ORDER BY role, username';
 
-    const users = await query(sql, params);
+    const [users] = await query(sql, params);
 
     if (users.length === 0) {
       // Return an empty CSV with headers so it's not blank
-      const csv = fields.join(',') + '\n';
+      const csv = fields.map(f => `"${f.replace('_', ' ')}"`).join(',') + '\n';
       res.setHeader('Content-Type', 'text/csv');
       res.setHeader('Content-Disposition', 'attachment; filename="users_export.csv"');
       return res.end(csv);
@@ -1399,7 +1478,8 @@ const exportUsers = async (req, res) => {
     console.error('Export users error:', error);
     res.status(500).json({
       success: false,
-      message: 'An error occurred exporting users.'
+      message: 'An error occurred exporting users.',
+      error: error.message
     });
   }
 };
@@ -1407,10 +1487,10 @@ const exportUsers = async (req, res) => {
 // Announce Results (Module 10)
 const announceResults = async (req, res) => {
   try {
-    const { batchId } = req.params;
+    const batchId = parseInt(req.params.batchId, 10);
     
-    if (!batchId) {
-      return res.status(400).json({ success: false, message: 'Batch ID is required' });
+    if (isNaN(batchId)) {
+      return res.status(400).json({ success: false, message: 'Invalid Batch ID provided.' });
     }
 
     // Consolidation Formula: Final% = (Group_Committee_Average / 2) + (Individual_Supervisor_Marks / 2).
@@ -1432,9 +1512,9 @@ const announceResults = async (req, res) => {
             SELECT AVG(total_marks) as avg_marks 
             FROM committee_evaluations 
             WHERE proposal_id = ? AND status = 'SUBMITTED'
-        `, [student.proposal_id]);
+        `, [parseInt(student.proposal_id, 10)]);
 
-        const commAvg = parseFloat(commAvgRow[0]?.avg_marks || 0);
+        const commAvg = parseFloat(commAvgRow?.[0]?.avg_marks || 0);
         const supTotal = parseFloat(student.supervisor_total || 0);
 
         const committee_score_50 = commAvg / 2;
@@ -1456,27 +1536,32 @@ const announceResults = async (req, res) => {
         await query(`
             INSERT INTO final_results (student_sap_id, batch_id, supervisor_score_50, committee_score_50, final_percentage, letter_grade)
             VALUES (?, ?, ?, ?, ?, ?)
-        `, [student.sap_id, parseInt(batchId), supervisor_score_50, committee_score_50, final_percentage, letter_grade]);
+        `, [student.sap_id, batchId, supervisor_score_50, committee_score_50, final_percentage, letter_grade]);
     }
 
     // Set results_released = true
     await query(`UPDATE academic_batches SET results_released = TRUE WHERE id = ?`, [batchId]);
 
     res.status(200).json({ success: true, message: 'Results announced successfully' });
-  } catch (err) {
-    console.error('Announce Results Error:', err);
-    res.status(500).json({ success: false, message: 'Internal Server Error' });
+  } catch (error) {
+    console.error('Announce Results Error:', error);
+    res.status(500).json({ success: false, message: 'Internal Server Error', error: error.message });
   }
 };
 
 // Finalize Batch (FYP-I -> FYP-II transition)
 const finalizeBatch = async (req, res) => {
-    const { batch_id } = req.body;
+    const batch_id_param = req.body.batch_id;
     const adminId = req.user.id;
     const ipAddress = getClientIp(req);
 
-    if (!batch_id) {
+    if (!batch_id_param) {
         return res.status(400).json({ success: false, message: 'Batch ID is required' });
+    }
+
+    const batch_id = parseInt(batch_id_param, 10);
+    if (isNaN(batch_id)) {
+        return res.status(400).json({ success: false, message: 'Invalid Batch ID provided.' });
     }
 
     try {
@@ -1519,7 +1604,7 @@ const finalizeBatch = async (req, res) => {
                 // Check if all members of this group passed
                 const [groupMembers] = await connection.query(`
                     SELECT sap_id FROM proposal_members WHERE proposal_id = ?
-                `, [group.id]);
+                `, [parseInt(group.id, 10)]);
                 
                 const groupSapIds = groupMembers.map(m => m.sap_id);
                 const allPassed = groupSapIds.every(id => sapIds.includes(id));
@@ -1532,8 +1617,8 @@ const finalizeBatch = async (req, res) => {
                             project_description, status, fyp_part, batch_id, parent_group_id
                         ) VALUES (?, ?, ?, ?, ?, 'approved', 'FYP-II', ?, ?)
                     `, [
-                        group.student_id, group.supervisor_id, group.supervisor_sap_id, 
-                        group.project_title, group.project_description, group.batch_id, group.id
+                        parseInt(group.student_id, 10), parseInt(group.supervisor_id, 10), group.supervisor_sap_id, 
+                        group.project_title, group.project_description, parseInt(group.batch_id, 10), parseInt(group.id, 10)
                     ]);
                     
                     const newGroupId = result.insertId;
@@ -1541,7 +1626,7 @@ const finalizeBatch = async (req, res) => {
                     // Copy members
                     const [members] = await connection.query(`
                         SELECT * FROM proposal_members WHERE proposal_id = ?
-                    `, [group.id]);
+                    `, [parseInt(group.id, 10)]);
 
                     for (const member of members) {
                         await connection.query(`
@@ -1550,14 +1635,14 @@ const finalizeBatch = async (req, res) => {
                             ) VALUES (?, ?, ?, ?, ?, ?, 'accepted')
                         `, [
                             newGroupId, member.sap_id, member.email, member.phone_number, 
-                            member.department, member.display_order
+                            member.department, parseInt(member.display_order, 10)
                         ]);
                     }
 
                     // Copy milestone history (task_submissions)
                     const [submissions] = await connection.query(`
                         SELECT * FROM task_submissions WHERE proposal_id = ?
-                    `, [group.id]);
+                    `, [parseInt(group.id, 10)]);
 
                     for (const sub of submissions) {
                         await connection.query(`
@@ -1566,7 +1651,7 @@ const finalizeBatch = async (req, res) => {
                                 supervisor_feedback, grade, feedback_date
                             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                         `, [
-                            sub.task_id, newGroupId, sub.student_id, sub.file_path, 
+                            parseInt(sub.task_id, 10), newGroupId, parseInt(sub.student_id, 10), sub.file_path, 
                             sub.submission_status, sub.supervisor_feedback, sub.grade, sub.feedback_date
                         ]);
                     }
@@ -1597,7 +1682,7 @@ const finalizeBatch = async (req, res) => {
         });
     } catch (error) {
         console.error('Finalize batch error:', error);
-        return res.status(500).json({ success: false, message: 'An error occurred finalizing the batch.' });
+        return res.status(500).json({ success: false, message: 'An error occurred finalizing the batch.', error: error.message });
     }
 };
 

@@ -20,7 +20,7 @@ const getMyProfile = async (req, res) => {
     `;
     const [user] = await query(userSql, [userId]);
 
-    if (!user) {
+    if (!user || user.length === 0) {
       return res.status(404).json({
         success: false,
         message: 'User not found.'
@@ -29,14 +29,15 @@ const getMyProfile = async (req, res) => {
 
     res.status(200).json({
       success: true,
-      data: user
+      data: user[0]
     });
 
   } catch (error) {
     console.error('Get profile error:', error);
     res.status(500).json({
       success: false,
-      message: 'An error occurred retrieving your profile.'
+      message: 'An error occurred retrieving your profile.',
+      error: error.message
     });
   }
 };
@@ -51,21 +52,22 @@ const updateProfile = async (req, res) => {
     // Get current user data
     const [currentUser] = await query('SELECT username, email, role FROM users WHERE id = ?', [userId]);
 
-    if (!currentUser) {
+    if (!currentUser || currentUser.length === 0) {
       return res.status(404).json({
         success: false,
         message: 'User not found.'
       });
     }
+    const currentUserData = currentUser[0];
 
     // Check if email is already taken by another user
-    if (email && email !== currentUser.email) {
+    if (email && email !== currentUserData.email) {
       const [existingEmail] = await query(
         'SELECT id FROM users WHERE email = ? AND id != ?',
         [email, userId]
       );
 
-      if (existingEmail) {
+      if (existingEmail && existingEmail.length > 0) {
         return res.status(400).json({
           success: false,
           message: 'Email already exists.'
@@ -78,13 +80,13 @@ const updateProfile = async (req, res) => {
     const params = [];
     const changes = {};
 
-    if (name !== undefined && name !== currentUser.username) {
+    if (name !== undefined && name !== currentUserData.username) {
       updates.push('username = ?');
       params.push(name);
       changes.name = name;
     }
 
-    if (email !== undefined && email !== currentUser.email) {
+    if (email !== undefined && email !== currentUserData.email) {
       updates.push('email = ?');
       params.push(email);
       changes.email = email;
@@ -99,7 +101,7 @@ const updateProfile = async (req, res) => {
     // Department is an Admin-controlled field, do not allow user to update.
 
     // Teacher-specific fields
-    if (currentUser.role === 'Teacher') {
+    if (currentUserData.role === 'Teacher') {
       if (research_areas !== undefined) {
         updates.push('research_areas = ?');
         params.push(research_areas);
@@ -138,7 +140,7 @@ const updateProfile = async (req, res) => {
       action: AuditActions.PROFILE_UPDATED,
       entityType: 'user',
       entityId: userId,
-      details: { username: currentUser.username, changes },
+      details: { username: currentUserData.username, changes },
       ipAddress
     });
 
@@ -158,14 +160,15 @@ const updateProfile = async (req, res) => {
     res.status(200).json({
       success: true,
       message: 'Profile updated successfully',
-      data: updatedUser
+      data: updatedUser[0]
     });
 
   } catch (error) {
     console.error('Update profile error:', error);
     res.status(500).json({
       success: false,
-      message: 'An error occurred updating your profile.'
+      message: 'An error occurred updating your profile.',
+      error: error.message
     });
   }
 };
@@ -186,16 +189,17 @@ const uploadProfilePicture = async (req, res) => {
     // Get old profile picture
     const [user] = await query('SELECT profile_picture, username FROM users WHERE id = ?', [userId]);
 
-    if (!user) {
+    if (!user || user.length === 0) {
       return res.status(404).json({
         success: false,
         message: 'User not found.'
       });
     }
+    const userData = user[0];
 
     // Delete old profile picture if exists
-    if (user.profile_picture) {
-      deleteOldProfilePicture(user.profile_picture);
+    if (userData.profile_picture) {
+      deleteOldProfilePicture(userData.profile_picture);
     }
 
     // Update database with new profile picture filename
@@ -208,7 +212,7 @@ const uploadProfilePicture = async (req, res) => {
       action: AuditActions.PROFILE_PICTURE_UPDATED,
       entityType: 'user',
       entityId: userId,
-      details: { username: user.username, filename },
+      details: { username: userData.username, filename },
       ipAddress
     });
 
@@ -225,7 +229,8 @@ const uploadProfilePicture = async (req, res) => {
     console.error('Upload profile picture error:', error);
     res.status(500).json({
       success: false,
-      message: 'An error occurred uploading profile picture.'
+      message: 'An error occurred uploading profile picture.',
+      error: error.message
     });
   }
 };
@@ -239,14 +244,15 @@ const deleteProfilePicture = async (req, res) => {
     // Get current profile picture
     const [user] = await query('SELECT profile_picture, username FROM users WHERE id = ?', [userId]);
 
-    if (!user) {
+    if (!user || user.length === 0) {
       return res.status(404).json({
         success: false,
         message: 'User not found.'
       });
     }
+    const userData = user[0];
 
-    if (!user.profile_picture) {
+    if (!userData.profile_picture) {
       return res.status(400).json({
         success: false,
         message: 'No profile picture to delete.'
@@ -254,7 +260,7 @@ const deleteProfilePicture = async (req, res) => {
     }
 
     // Delete file
-    deleteOldProfilePicture(user.profile_picture);
+    deleteOldProfilePicture(userData.profile_picture);
 
     // Update database
     await query('UPDATE users SET profile_picture = NULL, updated_at = NOW() WHERE id = ?', [userId]);
@@ -265,7 +271,7 @@ const deleteProfilePicture = async (req, res) => {
       action: AuditActions.PROFILE_PICTURE_DELETED,
       entityType: 'user',
       entityId: userId,
-      details: { username: user.username },
+      details: { username: userData.username },
       ipAddress
     });
 
@@ -278,7 +284,8 @@ const deleteProfilePicture = async (req, res) => {
     console.error('Delete profile picture error:', error);
     res.status(500).json({
       success: false,
-      message: 'An error occurred deleting profile picture.'
+      message: 'An error occurred deleting profile picture.',
+      error: error.message
     });
   }
 };
@@ -287,9 +294,8 @@ const deleteProfilePicture = async (req, res) => {
 const checkUserExists = async (req, res) => {
   try {
     const { sap_id, email, exclude_proposal_id } = req.query;
-    const excludeProposalId = exclude_proposal_id && /^\d+$/.test(String(exclude_proposal_id))
-      ? Number(exclude_proposal_id)
-      : null;
+    const parsedExcludeProposalId = parseInt(exclude_proposal_id, 10);
+    const cleanExcludeProposalId = isNaN(parsedExcludeProposalId) ? null : parsedExcludeProposalId;
 
     if (!sap_id && !email) {
       return res.status(400).json({
@@ -311,7 +317,7 @@ const checkUserExists = async (req, res) => {
 
     const [user] = await query(sql, [param]);
 
-    if (!user) {
+    if (!user || user.length === 0) {
       return res.status(200).json({
         success: true,
         exists: false,
@@ -321,6 +327,7 @@ const checkUserExists = async (req, res) => {
         reason: 'User not found'
       });
     }
+    const userData = user[0];
 
     const statusList = "('draft', 'pending_member_confirmation', 'submitted', 'revision_requested', 'approved')";
 
@@ -331,7 +338,7 @@ const checkUserExists = async (req, res) => {
       WHERE (pm.sap_id = ? OR pm.email = ?)
         AND pm.status IN ('pending', 'accepted')
         AND p.status IN ${statusList}
-        ${excludeProposalId ? 'AND p.id != ?' : ''}
+        ${cleanExcludeProposalId ? 'AND p.id != ?' : ''}
     `;
 
     const leaderSide = `
@@ -339,21 +346,21 @@ const checkUserExists = async (req, res) => {
       FROM proposals p
       WHERE p.student_id = ?
         AND p.status IN ${statusList}
-        ${excludeProposalId ? 'AND p.id != ?' : ''}
+        ${cleanExcludeProposalId ? 'AND p.id != ?' : ''}
     `;
 
     const finalSql = `${memberSide} UNION ${leaderSide}`;
-    const params = excludeProposalId
-      ? [user.sap_id, user.email, excludeProposalId, user.id, excludeProposalId]
-      : [user.sap_id, user.email, user.id];
+    const params = cleanExcludeProposalId
+      ? [userData.sap_id, userData.email, cleanExcludeProposalId, userData.id, cleanExcludeProposalId]
+      : [userData.sap_id, userData.email, userData.id];
 
-    const conflicts = await query(finalSql, params);
+    const [conflicts] = await query(finalSql, params);
 
     return res.status(200).json({
       success: true,
       exists: true,
-      email: user.email,
-      phone: user.phone || null,
+      email: userData.email,
+      phone: userData.phone || null,
       available: conflicts.length === 0,
       reason: conflicts.length > 0 ? 'User is already part of another active or approved proposal' : null
     });
@@ -361,7 +368,8 @@ const checkUserExists = async (req, res) => {
     console.error('Check user exists error:', error);
     res.status(500).json({
       success: false,
-      message: 'Failed to verify SAP ID'
+      message: 'Failed to verify user existence.',
+      error: error.message
     });
   }
 };
@@ -371,7 +379,7 @@ const getMyResult = async (req, res) => {
         const userId = req.user.id;
         const [user] = await query('SELECT sap_id, batch_id FROM users WHERE id = ?', [userId]);
 
-        if (!user || !user.sap_id) {
+        if (!user || user.length === 0 || !user[0].sap_id) {
             return res.status(404).json({ success: false, message: 'User SAP ID not found.' });
         }
 
@@ -380,15 +388,15 @@ const getMyResult = async (req, res) => {
             FROM final_results 
             WHERE student_sap_id COLLATE utf8mb4_unicode_ci = ?
             ORDER BY created_at DESC LIMIT 1
-        `, [user.sap_id]);
+        `, [user[0].sap_id]);
 
         return res.status(200).json({
             success: true,
-            data: results ? results : null
+            data: results && results.length > 0 ? results[0] : null
         });
     } catch (err) {
         console.error('Error fetching my result:', err);
-        return res.status(500).json({ success: false, message: 'Internal Server Error' });
+        return res.status(500).json({ success: false, message: 'Internal Server Error', error: err.message });
     }
 };
 

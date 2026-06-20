@@ -9,23 +9,28 @@ exports.createProject = async (req, res) => {
   try {
     const {
       title,
-      year,
+      year: yearParam,
       abstract,
       department,
       supervisor_name,
-      supervisor_id,
+      supervisor_id: supervisorIdParam,
       technology_type,
-      final_grade,
+      final_grade: finalGradeParam,
       keywords,
       student_names
     } = req.body;
 
     // Validation
-    if (!title || !year || !abstract || !department || !supervisor_name) {
+    if (!title || !yearParam || !abstract || !department || !supervisor_name) {
       return res.status(400).json({
         success: false,
         message: 'Title, year, abstract, department, and supervisor name are required'
       });
+    }
+
+    const year = parseInt(yearParam, 10);
+    if (isNaN(year)) {
+        return res.status(400).json({ success: false, message: 'Invalid year provided.' });
     }
 
     // Helper function to convert empty strings to null
@@ -36,17 +41,32 @@ exports.createProject = async (req, res) => {
     };
 
     // Validate supervisor_id if provided (must exist in users table)
-    let validatedSupervisorId = toNullIfEmpty(supervisor_id);
+    let validatedSupervisorId = toNullIfEmpty(supervisorIdParam);
     if (validatedSupervisorId !== null) {
-      const [supervisorExists] = await connection.execute(
-        'SELECT id FROM users WHERE id = ?',
-        [validatedSupervisorId]
-      );
-      
-      // If supervisor doesn't exist, set to NULL instead of failing
-      if (supervisorExists.length === 0) {
-        console.warn(`Supervisor ID ${validatedSupervisorId} not found in users table. Setting to NULL.`);
+      validatedSupervisorId = parseInt(validatedSupervisorId, 10);
+      if (isNaN(validatedSupervisorId)) {
+        console.warn(`Supervisor ID ${supervisorIdParam} is not a valid number. Setting to NULL.`);
         validatedSupervisorId = null;
+      } else {
+        const [supervisorExists] = await connection.execute(
+          'SELECT id FROM users WHERE id = ?',
+          [validatedSupervisorId]
+        );
+        
+        // If supervisor doesn't exist, set to NULL instead of failing
+        if (supervisorExists.length === 0) {
+          console.warn(`Supervisor ID ${validatedSupervisorId} not found in users table. Setting to NULL.`);
+          validatedSupervisorId = null;
+        }
+      }
+    }
+
+    let final_grade = toNullIfEmpty(finalGradeParam);
+    if (final_grade !== null) {
+      final_grade = parseFloat(final_grade);
+      if (isNaN(final_grade)) {
+        console.warn(`Final grade ${finalGradeParam} is not a valid number. Setting to NULL.`);
+        final_grade = null;
       }
     }
 
@@ -59,7 +79,7 @@ exports.createProject = async (req, res) => {
       supervisor_name: supervisor_name.trim(),
       supervisor_id: validatedSupervisorId,
       technology_type: toNullIfEmpty(technology_type),
-      final_grade: toNullIfEmpty(final_grade),
+      final_grade: final_grade,
       keywords: toNullIfEmpty(keywords),
       student_names: toNullIfEmpty(student_names)
     };
@@ -108,7 +128,7 @@ exports.createProject = async (req, res) => {
     res.status(500).json({
       success: false,
       message: 'Failed to create project',
-      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+      error: error.message
     });
   } finally {
     connection.release();
@@ -176,23 +196,38 @@ exports.bulkImportProjects = async (req, res) => {
           throw new Error('Invalid year format (must be 4 digits)');
         }
 
-        const year = parseInt(project.year);
-        if (year < 1900 || year > 2100) {
-          throw new Error('Year must be between 1900 and 2100');
+        const year = parseInt(project.year, 10);
+        if (isNaN(year) || year < 1900 || year > 2100) {
+          throw new Error('Year must be a valid number between 1900 and 2100');
         }
 
         // Validate supervisor_id if provided (must exist in users table)
         let validatedSupervisorId = toNullIfEmpty(project.supervisor_id);
         if (validatedSupervisorId !== null) {
-          const [supervisorExists] = await connection.execute(
-            'SELECT id FROM users WHERE id = ?',
-            [validatedSupervisorId]
-          );
-          
-          // If supervisor doesn't exist, set to NULL instead of failing
-          if (supervisorExists.length === 0) {
-            console.warn(`Row ${i + 1}: Supervisor ID ${validatedSupervisorId} not found. Setting to NULL.`);
+          validatedSupervisorId = parseInt(validatedSupervisorId, 10);
+          if (isNaN(validatedSupervisorId)) {
+            console.warn(`Row ${i + 1}: Supervisor ID ${project.supervisor_id} is not a valid number. Setting to NULL.`);
             validatedSupervisorId = null;
+          } else {
+            const [supervisorExists] = await connection.execute(
+              'SELECT id FROM users WHERE id = ?',
+              [validatedSupervisorId]
+            );
+            
+            // If supervisor doesn't exist, set to NULL instead of failing
+            if (supervisorExists.length === 0) {
+              console.warn(`Row ${i + 1}: Supervisor ID ${validatedSupervisorId} not found. Setting to NULL.`);
+              validatedSupervisorId = null;
+            }
+          }
+        }
+
+        let final_grade = toNullIfEmpty(project.final_grade);
+        if (final_grade !== null) {
+          final_grade = parseFloat(final_grade);
+          if (isNaN(final_grade)) {
+            console.warn(`Row ${i + 1}: Final grade ${project.final_grade} is not a valid number. Setting to NULL.`);
+            final_grade = null;
           }
         }
 
@@ -210,7 +245,7 @@ exports.bulkImportProjects = async (req, res) => {
             supervisor_name,
             validatedSupervisorId,
             toNullIfEmpty(project.technology_type),
-            toNullIfEmpty(project.final_grade),
+            final_grade,
             toNullIfEmpty(project.keywords),
             toNullIfEmpty(project.student_names),
             req.user.id
@@ -256,7 +291,7 @@ exports.bulkImportProjects = async (req, res) => {
     res.status(500).json({
       success: false,
       message: 'Failed to import projects',
-      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+      error: error.message
     });
   } finally {
     connection.release();
@@ -279,15 +314,33 @@ exports.searchProjects = async (req, res) => {
     const {
       keyword,
       supervisor,
-      year,
+      year: yearParam,
       department,
       technology,
-      grade,
+      grade: gradeParam,
       operator = 'AND',
-      page = 1,
-      limit = 10,
+      page: pageParam = 1,
+      limit: limitParam = 10,
       sortBy = 'relevance'
     } = req.query;
+
+    const page = parseInt(pageParam, 10);
+    const limit = parseInt(limitParam, 10);
+    const year = parseInt(yearParam, 10);
+    const grade = parseFloat(gradeParam);
+
+    if (isNaN(page) || page < 1) {
+      return res.status(400).json({ success: false, message: 'Invalid page number provided.' });
+    }
+    if (isNaN(limit) || limit < 1) {
+      return res.status(400).json({ success: false, message: 'Invalid limit value provided.' });
+    }
+    if (yearParam && isNaN(year)) {
+      return res.status(400).json({ success: false, message: 'Invalid year provided.' });
+    }
+    if (gradeParam && isNaN(grade)) {
+      return res.status(400).json({ success: false, message: 'Invalid grade provided.' });
+    }
 
     // Build WHERE clause
     const conditions = [];
@@ -309,7 +362,7 @@ exports.searchProjects = async (req, res) => {
       params.push(`%${supervisor}%`);
     }
 
-    if (year) {
+    if (yearParam) {
       conditions.push('year = ?');
       params.push(year);
     }
@@ -324,7 +377,7 @@ exports.searchProjects = async (req, res) => {
       params.push(`%${technology}%`);
     }
 
-    if (grade) {
+    if (gradeParam) {
       conditions.push('final_grade = ?');
       params.push(grade);
     }
@@ -405,7 +458,7 @@ exports.searchProjects = async (req, res) => {
       LIMIT ? OFFSET ?
     `;
 
-    const finalParams = [...params, parseInt(limit), parseInt(offset)];
+    const finalParams = [...params, limit, offset];
     const [projects] = await connection.execute(searchQuery, finalParams);
 
     // DEBUG LOGGING (remove after testing)
@@ -421,8 +474,8 @@ exports.searchProjects = async (req, res) => {
         projects,
         pagination: {
           total,
-          page: parseInt(page),
-          limit: parseInt(limit),
+          page: page,
+          limit: limit,
           totalPages: Math.ceil(total / limit)
         }
       }
@@ -435,7 +488,7 @@ exports.searchProjects = async (req, res) => {
     res.status(500).json({
       success: false,
       message: 'Failed to search projects',
-      error: process.env.NODE_ENV === 'development' ? error.message : undefined
+      error: error.message
     });
   } finally {
     connection.release();
@@ -448,7 +501,12 @@ exports.searchProjects = async (req, res) => {
 exports.getProjectDetails = async (req, res) => {
   const connection = await pool.getConnection();
   try {
-    const { id } = req.params;
+    const { id: idParam } = req.params;
+    const id = parseInt(idParam, 10);
+
+    if (isNaN(id)) {
+      return res.status(400).json({ success: false, message: 'Invalid Project ID provided.' });
+    }
 
     const [projects] = await connection.execute(
       `SELECT * FROM archived_projects WHERE id = ?`,
@@ -470,7 +528,8 @@ exports.getProjectDetails = async (req, res) => {
     console.error('Get project details error:', error);
     res.status(500).json({
       success: false,
-      message: 'Failed to retrieve project details'
+      message: 'Failed to retrieve project details',
+      error: error.message
     });
   } finally {
     connection.release();
@@ -483,19 +542,47 @@ exports.getProjectDetails = async (req, res) => {
 exports.updateProject = async (req, res) => {
   const connection = await pool.getConnection();
   try {
-    const { id } = req.params;
+    const { id: idParam } = req.params;
     const {
       title,
-      year,
+      year: yearParam,
       abstract,
       department,
       supervisor_name,
-      supervisor_id,
+      supervisor_id: supervisorIdParam,
       technology_type,
-      final_grade,
+      final_grade: finalGradeParam,
       keywords,
       student_names
     } = req.body;
+
+    const id = parseInt(idParam, 10);
+    if (isNaN(id)) {
+      return res.status(400).json({ success: false, message: 'Invalid Project ID provided.' });
+    }
+
+    const year = parseInt(yearParam, 10);
+    if (isNaN(year)) {
+      return res.status(400).json({ success: false, message: 'Invalid year provided.' });
+    }
+
+    let validatedSupervisorId = supervisorIdParam;
+    if (validatedSupervisorId !== null && validatedSupervisorId !== undefined) {
+      validatedSupervisorId = parseInt(validatedSupervisorId, 10);
+      if (isNaN(validatedSupervisorId)) {
+        console.warn(`Supervisor ID ${supervisorIdParam} is not a valid number. Setting to NULL.`);
+        validatedSupervisorId = null;
+      }
+    }
+
+    let final_grade = finalGradeParam;
+    if (final_grade !== null && final_grade !== undefined) {
+      final_grade = parseFloat(final_grade);
+      if (isNaN(final_grade)) {
+        console.warn(`Final grade ${finalGradeParam} is not a valid number. Setting to NULL.`);
+        final_grade = null;
+      }
+    }
 
     // Get old data for logging
     const [oldData] = await connection.execute(
@@ -523,7 +610,7 @@ exports.updateProject = async (req, res) => {
         abstract,
         department,
         supervisor_name,
-        supervisor_id || null,
+        validatedSupervisorId,
         technology_type || null,
         final_grade || null,
         keywords || null,
@@ -549,7 +636,8 @@ exports.updateProject = async (req, res) => {
     console.error('Update project error:', error);
     res.status(500).json({
       success: false,
-      message: 'Failed to update project'
+      message: 'Failed to update project',
+      error: error.message
     });
   } finally {
     connection.release();
@@ -562,7 +650,12 @@ exports.updateProject = async (req, res) => {
 exports.deleteProject = async (req, res) => {
   const connection = await pool.getConnection();
   try {
-    const { id } = req.params;
+    const { id: idParam } = req.params;
+    const id = parseInt(idParam, 10);
+
+    if (isNaN(id)) {
+      return res.status(400).json({ success: false, message: 'Invalid Project ID provided.' });
+    }
 
     // Get project data before deletion
     const [project] = await connection.execute(
@@ -599,7 +692,8 @@ exports.deleteProject = async (req, res) => {
     console.error('Delete project error:', error);
     res.status(500).json({
       success: false,
-      message: 'Failed to delete project'
+      message: 'Failed to delete project',
+      error: error.message
     });
   } finally {
     connection.release();
@@ -677,7 +771,8 @@ exports.getProjectStats = async (req, res) => {
     console.error('Get project stats error:', error);
     res.status(500).json({
       success: false,
-      message: 'Failed to retrieve statistics'
+      message: 'Failed to retrieve statistics',
+      error: error.message
     });
   } finally {
     connection.release();
@@ -729,7 +824,8 @@ exports.getFilterOptions = async (req, res) => {
     console.error('Get filter options error:', error);
     res.status(500).json({
       success: false,
-      message: 'Failed to retrieve filter options'
+      message: 'Failed to retrieve filter options',
+      error: error.message
     });
   } finally {
     connection.release();

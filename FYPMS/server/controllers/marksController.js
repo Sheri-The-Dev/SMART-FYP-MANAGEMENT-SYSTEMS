@@ -8,6 +8,11 @@ const getSupervisorStudentsForMarks = async (req, res) => {
         
         const phase = req.query.phase || 'FYP-I'; 
 
+        const parsedBatchId = parseInt(batch_id, 10);
+
+        if (isNaN(parsedBatchId) && batch_id !== 'all') {
+            return res.status(400).json({ success: false, message: 'Invalid Batch ID provided' });
+        }
         if (!batch_id) {
             return res.status(400).json({ success: false, message: 'Batch ID is required' });
         }
@@ -47,7 +52,7 @@ const getSupervisorStudentsForMarks = async (req, res) => {
               AND (p.supervisor_id = ? OR p.supervisor_sap_id COLLATE utf8mb4_unicode_ci = ?)
               ${batch_id !== 'all' ? 'AND p.batch_id = ?' : ''}
             ORDER BY p.batch_id, p.id, student_role DESC, u.username
-        `, batch_id !== 'all' ? [phase, supervisor_id, req.user.sap_id || null, batch_id] : [phase, supervisor_id, req.user.sap_id || null]);
+        `, batch_id !== 'all' ? [phase, supervisor_id, req.user.sap_id || null, parsedBatchId] : [phase, supervisor_id, req.user.sap_id || null]);
 
         // Reshape rows into a nested JSON structure: Group -> Students[]
         const groupsMap = {};
@@ -80,7 +85,7 @@ const getSupervisorStudentsForMarks = async (req, res) => {
         // Check if an evaluation session is active for the batch and phase
         const [sessionRows] = await pool.query(
             `SELECT is_active FROM evaluation_sessions WHERE batch_id = ? AND phase = ? LIMIT 1`,
-            [batch_id !== 'all' ? batch_id : 0, phase] // If batch_id is 'all', this check might not be fully accurate, but we will assume no active session or fetch per batch if needed
+            [batch_id !== 'all' ? parsedBatchId : 0, phase] // If batch_id is 'all', this check might not be fully accurate, but we will assume no active session or fetch per batch if needed
         );
         let is_evaluation_active = false;
         if (batch_id !== 'all') {
@@ -93,15 +98,9 @@ const getSupervisorStudentsForMarks = async (req, res) => {
             data: Object.values(groupsMap)
         });
 
-    } catch (err) {
-        console.error('=== EVALUATION ERROR ===');
-        console.error('Message:', err.message);
-        console.error('SQL Error:', err.sqlMessage);
-        return res.status(500).json({ 
-            success: false, 
-            message: err.message, 
-            sql: err.sqlMessage 
-        });
+    } catch (error) {
+        console.error('Error in getSupervisorStudentsForMarks:', error);
+        return res.status(500).json({ success: false, error: error.message });
     }
 };
 
@@ -117,6 +116,13 @@ const upsertMarks = async (req, res) => {
             status 
         } = req.body;
 
+        const parsedBatchId = parseInt(batch_id, 10);
+        const parsedProposalId = parseInt(proposal_id, 10);
+
+        if (isNaN(parsedBatchId) || isNaN(parsedProposalId)) {
+            return res.status(400).json({ success: false, message: 'Invalid Batch ID or Proposal ID provided' });
+        }
+
         if (!student_sap_id || !batch_id || !proposal_id || !marks) {
             return res.status(400).json({ success: false, message: 'Missing required fields' });
         }
@@ -124,14 +130,14 @@ const upsertMarks = async (req, res) => {
         // Module Evaluate: Task 2 Supervisor Block
         const [sessionRows] = await pool.query(
             `SELECT is_active FROM evaluation_sessions WHERE batch_id = ? AND phase = ? LIMIT 1`,
-            [batch_id, fyp_phase]
+            [parsedBatchId, fyp_phase]
         );
         const isEvaluationActive = sessionRows.length > 0 && sessionRows[0].is_active;
 
         if (isEvaluationActive) {
             const [committeeRows] = await pool.query(
                 `SELECT status FROM committee_evaluations WHERE proposal_id = ? AND fyp_phase = ? LIMIT 1`,
-                [proposal_id, fyp_phase]
+                [parsedProposalId, fyp_phase]
             );
             // If committee has not submitted, marks are pending
             const isPending = committeeRows.length === 0 || committeeRows[0].status !== 'SUBMITTED';
@@ -176,7 +182,7 @@ const upsertMarks = async (req, res) => {
         `;
 
         const values = [
-            supervisor_id, student_sap_id, batch_id, proposal_id, fyp_phase,
+            supervisor_id, student_sap_id, parsedBatchId, parsedProposalId, fyp_phase,
             lo1, lo2, lo3, lo4, lo5, lo6, lo7, lo8, status
         ];
 
@@ -188,8 +194,8 @@ const upsertMarks = async (req, res) => {
         });
 
     } catch (error) {
-        console.error('Error saving supervisor marks:', error);
-        return res.status(500).json({ success: false, message: 'Internal server error while saving marks' });
+        console.error('Error in upsertMarks:', error);
+        return res.status(500).json({ success: false, error: error.message });
     }
 };
 
@@ -198,6 +204,12 @@ const getStudentMarksRecord = async (req, res) => {
         const { batch_id, student_sap_id } = req.params;
         const supervisor_id = req.user.id;
         const phase = req.query.phase || 'FYP-I';
+
+        const parsedBatchId = parseInt(batch_id, 10);
+
+        if (isNaN(parsedBatchId)) {
+            return res.status(400).json({ success: false, message: 'Invalid Batch ID provided' });
+        }
 
         const [rows] = await pool.query(`
             SELECT sm.*
@@ -208,15 +220,15 @@ const getStudentMarksRecord = async (req, res) => {
               AND sm.fyp_phase      = ?
               AND p.supervisor_id   = ?
             LIMIT 1
-        `, [batch_id, student_sap_id, phase, supervisor_id]);
+        `, [parsedBatchId, student_sap_id, phase, supervisor_id]);
 
         if (rows.length === 0) {
             return res.status(200).json({ success: true, data: null });
         }
         return res.status(200).json({ success: true, data: rows[0] });
     } catch (error) {
-        console.error('Error fetching student marks record:', error);
-        return res.status(500).json({ success: false, message: 'Internal server error' });
+        console.error('Error in getStudentMarksRecord:', error);
+        return res.status(500).json({ success: false, error: error.message });
     }
 };
 
@@ -228,6 +240,11 @@ const getGradeSummary = async (req, res) => {
     try {
         const { batchId } = req.params;
 
+        const parsedBatchId = parseInt(batchId, 10);
+
+        if (isNaN(parsedBatchId)) {
+            return res.status(400).json({ success: false, message: 'Invalid Batch ID provided' });
+        }
         if (!batchId) {
             return res.status(400).json({ success: false, message: 'Batch ID is required' });
         }
@@ -262,12 +279,12 @@ const getGradeSummary = async (req, res) => {
             WHERE p.batch_id = ?
               AND p.status = 'approved'
             ORDER BY p.id, u.username
-        `, [batchId]);
+        `, [parsedBatchId]);
 
         return res.status(200).json({ success: true, data: rows });
     } catch (error) {
-        console.error('Error fetching grade summary:', error);
-        return res.status(500).json({ success: false, message: 'Internal server error' });
+        console.error('Error in getGradeSummary:', error);
+        return res.status(500).json({ success: false, error: error.message });
     }
 };
 

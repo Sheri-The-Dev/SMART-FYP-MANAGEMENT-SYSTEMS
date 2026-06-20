@@ -14,8 +14,16 @@ exports.createPresentation = async (req, res) => {
   try {
     await connection.beginTransaction();
 
-    const { batch_id, presentation_date, presentation_time, venue, group_ids = [] } = req.body;
-    if (!batch_id || !presentation_date || !presentation_time || !venue) {
+    const { batch_id: batchIdParam, presentation_date, presentation_time, venue, group_ids = [] } = req.body;
+
+    const batch_id = parseInt(batchIdParam, 10);
+    if (isNaN(batch_id)) {
+      await connection.rollback();
+      return res.status(400).json({ success: false, message: 'Invalid Batch ID provided.' });
+    }
+
+    if (!batchIdParam || !presentation_date || !presentation_time || !venue) {
+      await connection.rollback();
       return res.status(400).json({ success: false, message: 'Missing required fields.' });
     }
 
@@ -28,7 +36,12 @@ exports.createPresentation = async (req, res) => {
 
     // Insert group assignments if any
     if (Array.isArray(group_ids) && group_ids.length > 0) {
-      for (const proposalId of group_ids) {
+      for (const proposalIdParam of group_ids) {
+        const proposalId = parseInt(proposalIdParam, 10);
+        if (isNaN(proposalId)) {
+          await connection.rollback();
+          return res.status(400).json({ success: false, message: `Invalid Proposal ID provided: ${proposalIdParam}` });
+        }
         await connection.query(
           'INSERT INTO presentation_group_assignments (presentation_id, proposal_id) VALUES (?, ?)',
           [presentationId, proposalId]
@@ -45,7 +58,7 @@ exports.createPresentation = async (req, res) => {
   } catch (error) {
     await connection.rollback();
     console.error('createPresentation Error:', error);
-    res.status(500).json({ success: false, message: 'Server error scheduling presentation.' });
+    res.status(500).json({ success: false, message: 'Server error scheduling presentation.', error: error.message });
   } finally {
     connection.release();
   }
@@ -60,7 +73,7 @@ exports.getPresentations = async (req, res) => {
       JOIN academic_batches b ON b.id = p.batch_id
       ORDER BY p.presentation_date DESC, p.presentation_time DESC
     `;
-    const presentations = await query(sql);
+    const [presentations] = await query(sql);
 
     // Get group details for each presentation
     for (let presentation of presentations) {
@@ -71,14 +84,14 @@ exports.getPresentations = async (req, res) => {
         JOIN users u ON u.id = pr.student_id
         WHERE pga.presentation_id = ?
       `;
-      const groups = await query(groupSql, [presentation.id]);
+      const [groups] = await query(groupSql, [presentation.id]);
       presentation.groups = groups;
     }
 
     res.status(200).json({ success: true, data: presentations });
   } catch (error) {
     console.error('getPresentations Error:', error);
-    res.status(500).json({ success: false, message: 'Server error retrieving schedules.' });
+    res.status(500).json({ success: false, message: 'Server error retrieving schedules.', error: error.message });
   }
 };
 
@@ -87,8 +100,20 @@ exports.updatePresentation = async (req, res) => {
   try {
     await connection.beginTransaction();
 
-    const { id } = req.params;
-    const { batch_id, presentation_date, presentation_time, venue, group_ids = [] } = req.body;
+    const { id: presentationIdParam } = req.params;
+    const { batch_id: batchIdParam, presentation_date, presentation_time, venue, group_ids = [] } = req.body;
+
+    const id = parseInt(presentationIdParam, 10);
+    if (isNaN(id)) {
+      await connection.rollback();
+      return res.status(400).json({ success: false, message: 'Invalid Presentation ID provided.' });
+    }
+
+    const batch_id = parseInt(batchIdParam, 10);
+    if (isNaN(batch_id)) {
+      await connection.rollback();
+      return res.status(400).json({ success: false, message: 'Invalid Batch ID provided.' });
+    }
 
     // Update presentation details
     await connection.query(
@@ -101,7 +126,12 @@ exports.updatePresentation = async (req, res) => {
 
     // Insert new group assignments if any
     if (Array.isArray(group_ids) && group_ids.length > 0) {
-      for (const proposalId of group_ids) {
+      for (const proposalIdParam of group_ids) {
+        const proposalId = parseInt(proposalIdParam, 10);
+        if (isNaN(proposalId)) {
+          await connection.rollback();
+          return res.status(400).json({ success: false, message: `Invalid Proposal ID provided: ${proposalIdParam}` });
+        }
         await connection.query(
           'INSERT INTO presentation_group_assignments (presentation_id, proposal_id) VALUES (?, ?)',
           [id, proposalId]
@@ -118,7 +148,7 @@ exports.updatePresentation = async (req, res) => {
   } catch (error) {
     await connection.rollback();
     console.error('updatePresentation Error:', error);
-    res.status(500).json({ success: false, message: 'Server error updating presentation.' });
+    res.status(500).json({ success: false, message: 'Server error updating presentation.', error: error.message });
   } finally {
     connection.release();
   }
@@ -126,21 +156,30 @@ exports.updatePresentation = async (req, res) => {
 
 exports.deletePresentation = async (req, res) => {
   try {
-    const { id } = req.params;
+    const { id: presentationIdParam } = req.params;
+    const id = parseInt(presentationIdParam, 10);
+    if (isNaN(id)) {
+      return res.status(400).json({ success: false, message: 'Invalid Presentation ID provided.' });
+    }
     await query('DELETE FROM faculty_presentations WHERE id = ?', [id]);
     res.status(200).json({ success: true, message: 'Presentation successfully deleted.' });
   } catch (error) {
     console.error('deletePresentation Error:', error);
-    res.status(500).json({ success: false, message: 'Server error deleting presentation.' });
+    res.status(500).json({ success: false, message: 'Server error deleting presentation.', error: error.message });
   }
 };
 
 // Get groups (proposals) for a batch that haven't been scheduled yet
 exports.getUnscheduledGroups = async (req, res) => {
   try {
-    const { batch_id } = req.query;
-    if (!batch_id) {
+    const { batch_id: batchIdParam } = req.query;
+    if (!batchIdParam) {
       return res.status(400).json({ success: false, message: 'Batch ID is required.' });
+    }
+
+    const batch_id = parseInt(batchIdParam, 10);
+    if (isNaN(batch_id)) {
+      return res.status(400).json({ success: false, message: 'Invalid Batch ID provided.' });
     }
 
     const sql = `
@@ -158,11 +197,11 @@ exports.getUnscheduledGroups = async (req, res) => {
       ORDER BY p.project_title
     `;
 
-    const groups = await query(sql, [batch_id, batch_id]);
+    const [groups] = await query(sql, [batch_id, batch_id]);
     res.status(200).json({ success: true, data: groups });
   } catch (error) {
     console.error('getUnscheduledGroups Error:', error);
-    res.status(500).json({ success: false, message: 'Server error retrieving unscheduled groups.' });
+    res.status(500).json({ success: false, message: 'Server error retrieving unscheduled groups.', error: error.message });
   }
 };
 
